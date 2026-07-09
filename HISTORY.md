@@ -427,6 +427,18 @@
 
 ---
 
+### [2026-07-09] GitHub 초기 커밋·푸시
+
+**요청**: 지금까지 작업 내용을 `woongiiit/Travel-POI-Dashboard` 저장소에 커밋·업로드.
+
+**변경**: git init, initial commit, `main` 브랜치 push. `.env.local`·`node_modules`·export 임시 파일 제외.
+
+**원격**: https://github.com/woongiiit/Travel-POI-Dashboard
+
+**키워드**: `git`, `github`, `deploy`
+
+---
+
 ## 키워드 인덱스
 
 | 키워드 | 관련 항목 |
