@@ -1,25 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-KT 통신데이터 기반 POI 방문자 엑셀 -> 대시보드용 집계 JSON 빌드.
+POI 최종 엑셀(와이드) -> 대시보드용 집계 JSON 빌드.
 
+원본: 참고자료/■중요■POI_최종(260723).xlsx (시트 POI_탄소발자국)
 산출물 (data/):
-  - factors.json        : 중분류별 1인당 탄소배출계수(앱과 공유)
-  - meta.json           : 필터 목록, 전국 KPI, 카테고리/지역 롤업, 월별 추이, Top
-  - pois.json           : POI별 집계 (방문자/배출량/현지인·외지인/지도 좌표 폴백)
-  - poi_monthly.json    : POI별 월별 방문자 시계열 (ymList 정렬)
+  - factors.json, meta.json, pois.json, poi_monthly.json
 
-탄소배출량(tCO2e) = Σ(월별 방문자수 × 중분류 배출계수[kgCO2e/인]) / 1000
+UI/스키마 호환:
+  - 현지인·외지인 미제공 → 전체를 v·vL에 넣고 vO=0 (필터 UI는 유지)
+  - 소분류 미제공 → scls=중분류
+  - cont_id 미제공 → 기존 pois.json 이름·시도·시군구 매칭으로 회수, 없으면 안정 해시 ID
+  - 월별 탄소 수식값 미캐시 → 방문자×계수×가중치×EWrt 로 재계산
 """
-import openpyxl, json, os, hashlib, math
+import openpyxl, json, os, hashlib, re
+from datetime import date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "참고자료", "(kt)관광지_현지인_외지인.xlsx")
+SRC = os.path.join(ROOT, "참고자료", "■중요■POI_최종(260723).xlsx")
+SHEET = "POI_탄소발자국"
 OUT = os.path.join(ROOT, "data")
 os.makedirs(OUT, exist_ok=True)
 
 with open(os.path.join(ROOT, "scripts", "factors.json"), encoding="utf-8") as f:
     FCONF = json.load(f)
-FACTORS = FCONF["factors"]
+FACTORS = dict(FCONF["factors"])
 FDEFAULT = FCONF["default"]
 LOW_TH = FCONF["lowCarbonThreshold"]
 
@@ -27,25 +31,68 @@ with open(os.path.join(ROOT, "scripts", "sido_centroids.json"), encoding="utf-8"
     CENTROIDS = json.load(f)
 
 COORDS_PATH = os.path.join(OUT, "poi_coords.json")
+OLD_POIS_PATH = os.path.join(OUT, "pois.json")
+
+# 와이드 컬럼 인덱스
+COL_SERIAL, COL_NM, COL_SIDO, COL_SGG, COL_LCLS, COL_MCLS = 0, 1, 2, 3, 4, 5
+COL_VIS_START, COL_VIS_END = 6, 46          # 2023.01 ~ 2026.04
+COL_COEF, COL_WEIGHT, COL_EWRT23, COL_EWRT24 = 46, 47, 48, 49
 
 
 def load_poi_coords_cache():
-    """data/poi_coords.json — KTO API 배치 조회 캐시."""
     if not os.path.isfile(COORDS_PATH):
         return {}
     with open(COORDS_PATH, encoding="utf-8") as f:
         return json.load(f).get("coords", {})
 
 
+def load_legacy_id_map():
+    """기존 pois.json: (sido, sgg, nm) / (sido, nm) → cont_id."""
+    by_full = {}
+    by_sido_nm = {}
+    if not os.path.isfile(OLD_POIS_PATH):
+        return by_full, by_sido_nm
+    with open(OLD_POIS_PATH, encoding="utf-8") as f:
+        for p in json.load(f):
+            key = (p.get("sido") or "", p.get("sgg") or "", p.get("nm") or "")
+            by_full[key] = str(p["id"])
+            by_sido_nm.setdefault((key[0], key[2]), str(p["id"]))
+    return by_full, by_sido_nm
+
+
 POI_COORDS = load_poi_coords_cache()
+LEGACY_FULL, LEGACY_SIDO_NM = load_legacy_id_map()
 
 
-def factor(mcls):
-    return FACTORS.get(mcls, FDEFAULT)
+def ym_from_label(label) -> str | None:
+    """'2023.01' / datetime → '202301'."""
+    if label is None:
+        return None
+    if hasattr(label, "strftime"):
+        return label.strftime("%Y%m")
+    s = str(label).strip()
+    m = re.match(r"^(\d{4})[.\-/]?(\d{1,2})$", s)
+    if not m:
+        return None
+    return f"{m.group(1)}{int(m.group(2)):02d}"
+
+
+def stable_id(sido, sgg, nm, serial) -> str:
+    raw = f"{sido}|{sgg}|{nm}|{serial}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def resolve_id(sido, sgg, nm, serial) -> str:
+    cid = LEGACY_FULL.get((sido or "", sgg or "", nm or ""))
+    if cid:
+        return cid
+    cid = LEGACY_SIDO_NM.get((sido or "", nm or ""))
+    if cid:
+        return cid
+    return stable_id(sido, sgg, nm, serial)
 
 
 def jitter_coord(sido, cont_id):
-    """시도 중심점 기준 결정적 분산 좌표(지도 폴백)."""
     base = CENTROIDS.get(sido, [127.7, 36.5])
     h = hashlib.md5((sido + str(cont_id)).encode("utf-8")).hexdigest()
     a = int(h[0:8], 16) / 0xFFFFFFFF
@@ -56,7 +103,6 @@ def jitter_coord(sido, cont_id):
 
 
 def resolve_coord(sido, cont_id):
-    """KTO 캐시 우선, 없으면 시도 중심 jitter 폴백."""
     entry = POI_COORDS.get(str(cont_id))
     if entry and entry.get("source") == "kto":
         lon, lat = entry.get("lon"), entry.get("lat")
@@ -66,71 +112,132 @@ def resolve_coord(sido, cont_id):
     return lon, lat
 
 
-print("loading workbook...")
-wb = openpyxl.load_workbook(SRC, read_only=True, data_only=True)
-ws = wb["result"]
+def num(v, default=0.0) -> float:
+    try:
+        if v is None or v == "":
+            return default
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
-ym_set = set()
+
+def ewrt_for_ym(ym: str, ewrt23: float, ewrt24: float) -> float:
+    year = int(ym[:4])
+    return ewrt23 if year <= 2023 else ewrt24
+
+
+print("loading workbook...", SRC)
+wb = openpyxl.load_workbook(SRC, read_only=True, data_only=True)
+if SHEET not in wb.sheetnames:
+    raise SystemExit(f"시트 '{SHEET}' 없음. sheets={wb.sheetnames}")
+ws = wb[SHEET]
+
+it = ws.iter_rows(values_only=True)
+header0 = next(it)
+header1 = next(it)
+
+ym_list = []
+for i in range(COL_VIS_START, COL_VIS_END):
+    ym = ym_from_label(header1[i] if header1 else None)
+    if not ym:
+        raise SystemExit(f"월 라벨 파싱 실패 col={i} value={header1[i]!r}")
+    ym_list.append(ym)
+
+print("months:", ym_list[0], "~", ym_list[-1], f"({len(ym_list)})")
+
 sido_set = set()
 sgg_by_sido = {}
 lcls_set = set()
 mcls_by_lcls = {}
+mcls_coef = {}  # 중분류 → 엑셀 계수(B안) 수집
 
-pois = {}          # cont_id -> aggregate
-poi_monthly = {}   # cont_id -> {ym: visitors}
-
-it = ws.iter_rows(values_only=True)
-next(it)  # header
+pois = {}
+poi_monthly = {}
+legacy_hit = 0
+legacy_miss = 0
 cnt = 0
+
 for row in it:
-    base_ym, cont_id, cont_nm, nati, sido, sgg, lcls, mcls, scls, s = row
-    if cont_id is None:
+    nm = row[COL_NM]
+    if nm is None or str(nm).strip() == "":
         continue
-    cnt += 1
-    s = float(s or 0)
-    ym_set.add(base_ym)
+    serial = row[COL_SERIAL]
+    sido = row[COL_SIDO] or ""
+    sgg = row[COL_SGG] or ""
+    lcls = row[COL_LCLS] or ""
+    mcls = row[COL_MCLS] or ""
+    coef = num(row[COL_COEF], FDEFAULT)
+    weight = num(row[COL_WEIGHT], 1.0)
+    ewrt23 = num(row[COL_EWRT23], 1.0)
+    ewrt24 = num(row[COL_EWRT24], 1.0)
+
+    cont_id = resolve_id(sido, sgg, nm, serial)
+    matched_legacy = (sido, sgg, nm) in LEGACY_FULL or (sido, nm) in LEGACY_SIDO_NM
+    if matched_legacy:
+        legacy_hit += 1
+    else:
+        legacy_miss += 1
+    # 동일 이름·지역 중복 행 → 고유 ID 보장
+    if cont_id in pois:
+        cont_id = f"{cont_id}_{serial}"
+        legacy_miss += 1
+        legacy_hit = max(0, legacy_hit - 1)
+
+    month_v = {}
+    total_v = 0.0
+    total_e_kg = 0.0
+    for i, ym in enumerate(ym_list):
+        v = num(row[COL_VIS_START + i])
+        month_v[ym] = v
+        total_v += v
+        total_e_kg += v * coef * weight * ewrt_for_ym(ym, ewrt23, ewrt24)
+
+    # UI pc: 실효 1인당 kg (총배출kg / 총방문자)
+    pc = (total_e_kg / total_v) if total_v > 0 else round(coef * weight, 3)
+
+    p = {
+        "id": cont_id,
+        "nm": str(nm).strip(),
+        "sido": sido,
+        "sgg": sgg,
+        "lcls": lcls,
+        "mcls": mcls,
+        "scls": mcls,  # 소분류 없음 → 중분류로 채움 (UI 유지)
+        "v": round(total_v, 1),
+        "vL": round(total_v, 1),  # 유형 미분리 → 전체에 귀속
+        "vO": 0.0,
+        "e": round(total_e_kg / 1000.0, 2),
+        "pc": round(pc, 3),
+    }
+    pois[cont_id] = p
+    poi_monthly[cont_id] = month_v
+
     sido_set.add(sido)
     sgg_by_sido.setdefault(sido, set()).add(sgg)
     lcls_set.add(lcls)
     mcls_by_lcls.setdefault(lcls, set()).add(mcls)
+    if mcls:
+        mcls_coef[mcls] = coef
 
-    p = pois.get(cont_id)
-    if p is None:
-        p = {
-            "id": cont_id, "nm": cont_nm, "sido": sido, "sgg": sgg,
-            "lcls": lcls, "mcls": mcls, "scls": scls,
-            "v": 0.0, "vL": 0.0, "vO": 0.0,
-        }
-        pois[cont_id] = p
-        poi_monthly[cont_id] = {}
-    p["v"] += s
-    if nati == "현지인":
-        p["vL"] += s
-    else:
-        p["vO"] += s
-    poi_monthly[cont_id][base_ym] = poi_monthly[cont_id].get(base_ym, 0.0) + s
-
-    if cnt % 100000 == 0:
+    cnt += 1
+    if cnt % 2000 == 0:
         print("  rows:", cnt)
 
 wb.close()
 print("rows total:", cnt, "pois:", len(pois))
+print(f"legacy cont_id match: hit={legacy_hit} miss={legacy_miss}")
 kto_coords = sum(1 for c in POI_COORDS.values() if c.get("source") == "kto")
-print(f"coord cache: kto={kto_coords} (poi_coords.json), jitter fallback for the rest")
+print(f"coord cache: kto={kto_coords} (poi_coords.json)")
 
-ym_list = sorted(ym_set)
+# factors.json: 엑셀 B안 계수로 갱신 (method 페이지용)
+for mcls, coef in mcls_coef.items():
+    FACTORS[mcls] = round(coef, 3)
 
-# ---- POI 배출량 및 좌표 폴백 ----
+# ---- 좌표 ----
 poi_list = []
 poi_monthly_out = {}
 for cid, p in pois.items():
-    f = factor(p["mcls"])
-    p["e"] = round(p["v"] * f / 1000.0, 2)           # tCO2e
-    p["pc"] = round(f, 3)                              # 1인당 kgCO2e
     p["lon"], p["lat"] = resolve_coord(p["sido"], cid)
-    p["v"] = round(p["v"], 1)
-    p["vL"] = round(p["vL"], 1)
-    p["vO"] = round(p["vO"], 1)
     poi_list.append(p)
     poi_monthly_out[cid] = [round(poi_monthly[cid].get(y, 0.0), 1) for y in ym_list]
 
@@ -138,11 +245,11 @@ for cid, p in pois.items():
 nat_month_v = {y: 0.0 for y in ym_list}
 nat_month_e = {y: 0.0 for y in ym_list}
 for cid, p in pois.items():
-    f = factor(p["mcls"])
     for y in ym_list:
         v = poi_monthly[cid].get(y, 0.0)
         nat_month_v[y] += v
-        nat_month_e[y] += v * f / 1000.0
+        # 월별 배출: pc 평균 사용 (POI별 실효계수)
+        nat_month_e[y] += v * p["pc"] / 1000.0
 national_monthly = [
     {"ym": y, "visitors": round(nat_month_v[y], 0), "emission": round(nat_month_e[y], 1)}
     for y in ym_list
@@ -198,9 +305,9 @@ top10_e = sum(p["e"] for p in top10)
 kpis = {
     "nPoi": len(poi_list),
     "totalVisitors": round(total_v, 0),
-    "totalEmission": round(total_e, 0),                       # tCO2e
-    "perPoiAvgKg": round(total_e_kg / len(poi_list) / n_months, 1),  # POI당 월평균 kgCO2e
-    "perCapitaKg": round(total_e_kg / total_v, 2) if total_v else 0,  # 1인당 평균
+    "totalEmission": round(total_e, 0),
+    "perPoiAvgKg": round(total_e_kg / len(poi_list) / n_months, 1) if poi_list and n_months else 0,
+    "perCapitaKg": round(total_e_kg / total_v, 2) if total_v else 0,
     "top10Share": round(top10_e / total_e * 100, 1) if total_e else 0,
     "lowCarbonCount": len(low_carbon),
     "nSido": len(sido_set),
@@ -210,7 +317,7 @@ kpis = {
 meta = {
     "ymList": ym_list,
     "ymMin": ym_list[0], "ymMax": ym_list[-1], "nMonths": n_months,
-    "updatedAt": "2026-06-06",
+    "updatedAt": date.today().isoformat(),
     "filters": {
         "sido": sorted(sido_set),
         "sggBySido": {k: sorted(v) for k, v in sgg_by_sido.items()},
@@ -228,7 +335,6 @@ meta = {
                "visitors": p["v"], "emission": p["e"]} for p in top10],
 }
 
-# ---- POI 저장(경량) ----
 pois_out = [{
     "id": p["id"], "nm": p["nm"], "sido": p["sido"], "sgg": p["sgg"],
     "lcls": p["lcls"], "mcls": p["mcls"], "scls": p["scls"],
@@ -244,7 +350,12 @@ def dump(name, obj):
     print("wrote", name, round(os.path.getsize(path) / 1024 / 1024, 2), "MB")
 
 
-dump("factors.json", {"factors": FACTORS, "default": FDEFAULT, "lowCarbonThreshold": LOW_TH})
+dump("factors.json", {
+    "factors": FACTORS,
+    "default": FDEFAULT,
+    "lowCarbonThreshold": LOW_TH,
+    "_comment": "POI_최종(260723) B안 계수. 실제 배출=방문자×계수×업종가중치×EWrt",
+})
 dump("meta.json", meta)
 dump("pois.json", pois_out)
 dump("poi_monthly.json", poi_monthly_out)

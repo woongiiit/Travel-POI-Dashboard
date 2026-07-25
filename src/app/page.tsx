@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -11,6 +11,8 @@ import {
   Map,
   MapPin,
   PieChart,
+  Shuffle,
+  Sparkles,
   Sprout,
   Users,
 } from "lucide-react";
@@ -34,7 +36,7 @@ import {
 import { donutOption, trendOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
 import { fmtEmission, fmtInt, fmtKorUnit, fmtNum } from "@/lib/format";
-import { nationalInsights } from "@/lib/insights";
+import { buildNationalAiInsight, nationalInsights, shortSido } from "@/lib/insights";
 
 const INSIGHT_ICONS = [Map, BarChart3, PieChart, Sprout] as const;
 const INSIGHT_TONES = ["teal", "purple", "amber", "green"] as const;
@@ -44,6 +46,9 @@ export default function HomePage() {
   const { meta, pois, loading, error, loadMonthly } = useDataset();
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
+  // AI 요약은 필터와 무관 — 세션마다·다시 뽑기마다 구성이 바뀜
+  const [aiSeed, setAiSeed] = useState(() => Math.floor(Math.random() * 2 ** 31));
+  const reshuffleAi = useCallback(() => setAiSeed(Math.floor(Math.random() * 2 ** 31)), []);
 
   useEffect(() => {
     loadMonthly().then(setMonthly);
@@ -82,6 +87,12 @@ export default function HomePage() {
     if (!meta || !monthly || !view) return null;
     return monthlySeries(view.filtered, monthly, meta.nMonths, filters.nati);
   }, [meta, monthly, view, filters.nati]);
+
+  // 필터와 무관하게 전국 전체 기준
+  const aiInsight = useMemo(() => {
+    if (!meta) return null;
+    return buildNationalAiInsight(pois, meta.nMonths, aiSeed);
+  }, [meta, pois, aiSeed]);
 
   const scopeLabel =
     filters.sido === ALL ? "전국" : filters.sgg === ALL ? filters.sido : `${filters.sido} ${filters.sgg}`;
@@ -130,6 +141,62 @@ export default function HomePage() {
       <FilterBar meta={meta} filters={filters} onChange={setFilters} />
 
       <div className="content">
+        <section className="ai-summary" aria-label="AI 인사이트 요약">
+          <div className="ai-summary__head">
+            <span className="ai-summary__icon">
+              <AppIcon icon={Sparkles} size={16} />
+            </span>
+            <h2 className="ai-summary__title">AI 인사이트 요약</h2>
+            <span className="ai-summary__scope">전국 · 전체 조건</span>
+            <button type="button" className="quad-shuffle" onClick={reshuffleAi}>
+              <AppIcon icon={Shuffle} size={12} />
+              다시 뽑기
+            </button>
+          </div>
+          {aiInsight && (
+            <div className="ai-summary__body">
+              {aiInsight.intro.map((line, i) => (
+                <p key={i}>{line}</p>
+              ))}
+
+              <div className="ai-summary__block">
+                <h3 className="ai-summary__subtitle">핵심 저탄소 콘텐츠 {aiInsight.contents.length}</h3>
+                <ol className="ai-summary__list">
+                  {aiInsight.contents.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        className="ai-summary__poi"
+                        onClick={() => handleMapSelect(c.id)}
+                        title={`${c.sido} ${c.sgg} · 1인당 ${fmtNum(c.perCapita, 2)} kgCO₂e`}
+                      >
+                        <span className="ai-summary__poi-region">{shortSido(c.sido)}</span>
+                        <span className="ai-summary__poi-name">{c.name}</span>
+                        <span className="ai-summary__poi-meta">{c.mcls} · {fmtNum(c.perCapita, 2)}kg</span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              <div className="ai-summary__block">
+                <h3 className="ai-summary__subtitle">추천 여행 코스 {aiInsight.courses.length} 옵션</h3>
+                <ul className="ai-summary__courses">
+                  {aiInsight.courses.map((course) => (
+                    <li key={course.label}>
+                      <span className="ai-summary__course-label">{course.label}</span>
+                      <div className="ai-summary__course-body">
+                        <strong>{course.title}</strong>
+                        <span className="ai-summary__course-path">{course.path}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+        </section>
+
         <div className="kpi-row">
           <Kpi variant="blue" icon={<AppIcon icon={MapPin} />} label="총 POI 수" value={fmtInt(agg.count)} unit="개" sub={`${scopeLabel} 기준`} />
           <Kpi variant="blue" icon={<AppIcon icon={Users} />} label="총 방문자 수" value={fmtKorUnit(agg.totalVisitors)} unit="명" sub="누적 방문자" />

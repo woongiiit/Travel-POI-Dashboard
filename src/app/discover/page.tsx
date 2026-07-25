@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Bike,
   Calendar,
@@ -9,6 +10,7 @@ import {
   MapPin,
   Megaphone,
   Route,
+  Shuffle,
   Sprout,
   Tags,
   TrendingUp,
@@ -20,8 +22,14 @@ import { PageHeader, Card, Kpi, LoadingState, ErrorState, Select, InsightBlock }
 import { EChart } from "@/components/charts/EChart";
 import { MapView, type MapPoint } from "@/components/MapView";
 import { ALL } from "@/lib/aggregate";
-import { scatterOption } from "@/lib/charts";
-import { lclsColor } from "@/lib/categories";
+import {
+  QUADRANT_META,
+  quadrantOf,
+  scatterOption,
+  scatterPointId,
+  type PositioningPoint,
+  type QuadrantKey,
+} from "@/lib/charts";
 import { fmtEmission, fmtInt, fmtNum } from "@/lib/format";
 import type { Poi } from "@/lib/types";
 
@@ -43,11 +51,38 @@ interface Scored extends Poi {
   grade: "S" | "A" | "B" | "C";
 }
 
+/** 산점도에 사분면별로 표시할 대표 POI 수 */
+const SAMPLE_PER_QUADRANT = 10;
+
+/** 시드 기반 의사난수 (같은 시드 → 같은 표본, 세션마다 시드가 달라짐) */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function sampleN<T>(arr: T[], n: number, rand: () => number): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
+}
+
 export default function DiscoverPage() {
   const { meta, pois, loading, error } = useDataset();
+  const router = useRouter();
   const [sido, setSido] = useState<string>(ALL);
   const [lcls, setLcls] = useState<string>(ALL);
   const [mcls, setMcls] = useState<string>(ALL);
+  // 세션(마운트)마다 다른 표본이 뽑히도록 무작위 시드로 시작
+  const [sampleSeed, setSampleSeed] = useState(() => Math.floor(Math.random() * 2 ** 31));
+  const reshuffle = useCallback(() => setSampleSeed(Math.floor(Math.random() * 2 ** 31)), []);
 
   const data = useMemo(() => {
     if (!meta) return null;
@@ -85,30 +120,59 @@ export default function DiscoverPage() {
     const hidden = scored.filter((p) => p.pc <= pcQ25 && p.mv < medV);
     const routeSgg = new Set(eligible.slice(0, 200).map((p) => p.sido + p.sgg));
 
+    const quadrants = {
+      hiPopLowPc: lowPopular.length,
+      hiPopHiPc: scored.filter((p) => p.pc > medPc && p.mv >= medV).length,
+      loPopLowPc: scored.filter((p) => p.pc <= medPc && p.mv < medV).length,
+      loPopHiPc: scored.filter((p) => p.pc > medPc && p.mv < medV).length,
+    };
+
     return {
-      f, scored, medV, medPc, eligible, lowPopular, candidates, hidden,
+      f, scored, medV, medPc, eligible, lowPopular, candidates, hidden, quadrants,
       routes: routeSgg.size,
     };
   }, [meta, pois, sido, lcls, mcls]);
+
+  const scatterConfig = useMemo(() => {
+    if (!data) return null;
+    const buckets = new Map<QuadrantKey, Scored[]>();
+    for (const p of data.scored) {
+      const q = quadrantOf(p.mv, p.pc, data.medV, data.medPc);
+      const bucket = buckets.get(q);
+      if (bucket) bucket.push(p);
+      else buckets.set(q, [p]);
+    }
+    const rand = mulberry32(sampleSeed);
+    const picked = (Object.keys(QUADRANT_META) as QuadrantKey[]).flatMap((q) =>
+      sampleN(buckets.get(q) ?? [], SAMPLE_PER_QUADRANT, rand),
+    );
+    const points: PositioningPoint[] = picked.map((p) => ({
+      id: p.id,
+      name: p.nm,
+      sgg: p.sgg,
+      lcls: p.lcls,
+      visitors: p.mv,
+      perCapita: p.pc,
+      emission: p.e,
+    }));
+    return scatterOption(points, data.medV, data.medPc);
+  }, [data, sampleSeed]);
 
   if (loading) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><LoadingState /></>);
   if (error || !meta || !data) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><ErrorState message={error ?? "오류"} /></>);
 
   const mclsOptions = lcls === ALL ? [ALL] : [ALL, ...(meta.filters.mclsByLcls[lcls] ?? [])];
 
-  const scatterPoints = data.scored
-    .slice()
-    .sort((a, b) => b.e - a.e)
-    .slice(0, 900)
-    .map((p) => ({
-      name: p.nm,
-      visitors: p.mv,
-      perCapita: p.pc,
-      emission: p.e,
-      color: lclsColor(p.lcls),
-    }));
-
   const recommend = data.eligible.filter((p) => p.grade !== "C").slice(0, 12);
+
+  const handleScatterSelect = (params: unknown) => {
+    const id = scatterPointId(params);
+    if (!id) return;
+    const poi = pois.find((p) => p.id === id);
+    if (!poi) return;
+    const query = new URLSearchParams({ poi: id, sido: poi.sido, sgg: poi.sgg });
+    router.push(`/region?${query.toString()}`);
+  };
 
   const mapPoints: MapPoint[] = data.eligible.slice(0, 120).map((p) => ({
     id: p.id, lon: p.lon, lat: p.lat, name: p.nm,
@@ -133,17 +197,35 @@ export default function DiscoverPage() {
         </div>
 
         <div className="grid" style={{ gridTemplateColumns: "1.25fr 1fr" }}>
-          <Card title="POI 인기(방문자) 대비 탄소배출 포지셔닝" unit="버블 크기=총 배출량, 점선=중앙값">
-            <EChart option={scatterOption(scatterPoints, data.medV, data.medPc)} height={380} />
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 6, fontSize: 11, color: "var(--text-muted)" }}>
-              <span>↘ 우하단: <b style={{ color: "var(--green)" }}>저탄소·고인기</b> (추천)</span>
-              <span>↗ 우상단: 고탄소·고인기</span>
-              <span>↙ 좌하단: 저탄소·저인기 (숨은 명소)</span>
+          <Card
+            title="POI 인기(방문자) 대비 탄소배출 포지셔닝"
+            unit={`사분면별 대표 ${SAMPLE_PER_QUADRANT}개 무작위 · 버블=총 배출량 · 양축 로그`}
+            right={
+              <button type="button" className="quad-shuffle" onClick={reshuffle}>
+                <AppIcon icon={Shuffle} size={12} />
+                다시 뽑기
+              </button>
+            }
+            foot="※ 표시되는 POI는 사분면별 무작위 표본이며 [다시 뽑기]로 교체할 수 있습니다. 칩의 건수는 필터 전체 기준입니다. 버블 클릭 시 상세 화면으로 이동합니다."
+          >
+            {scatterConfig && (
+              <EChart option={scatterConfig} height={420} onEvents={{ click: handleScatterSelect }} />
+            )}
+            <div className="quad-legend">
+              {(Object.keys(QUADRANT_META) as QuadrantKey[]).map((q) => (
+                <QuadrantChip
+                  key={q}
+                  color={QUADRANT_META[q].color}
+                  label={QUADRANT_META[q].label}
+                  note={QUADRANT_META[q].note}
+                  count={data.quadrants[q]}
+                />
+              ))}
             </div>
           </Card>
 
           <Card title="저탄소 추천 POI" foot="※ 인기 대비 탄소효율 + 저배출 종합 점수 기준">
-            <div style={{ maxHeight: 380, overflow: "auto" }}>
+            <div style={{ maxHeight: 430, overflow: "auto" }}>
               <table className="tbl">
                 <thead>
                   <tr><th>순위</th><th>POI명</th><th>시군구</th><th>중분류</th><th className="num">1인당</th><th>등급</th></tr>
@@ -172,11 +254,11 @@ export default function DiscoverPage() {
 
           <Card title="저탄소 콘텐츠 발굴 로직">
             <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-              <LogicBox no="1" w="50%" title="인기 대비 탄소효율" desc="탄소효율지수 = 월평균 방문자 / 1인당 배출량. 높을수록 효율적" color="var(--green)" />
+              <LogicBox no="1" title="인기 대비 탄소효율" desc="탄소효율지수 = 월평균 방문자 / 1인당 배출량. 높을수록 효율적" color="var(--green)" />
               <Plus />
-              <LogicBox no="2" w="30%" title="접근성" desc="대중교통 접근성·이동 편의성(가정)" color="var(--data-blue)" />
+              <LogicBox no="2" title="접근성" desc="대중교통 접근성·이동 편의성(가정)" color="var(--data-blue)" />
               <Plus />
-              <LogicBox no="3" w="20%" title="연계 가능성" desc="주변 관광자원 연계·체류시간(가정)" color="var(--carbon-purple)" />
+              <LogicBox no="3" title="연계 가능성" desc="주변 관광자원 연계·체류시간(가정)" color="var(--carbon-purple)" />
             </div>
             <div style={{ marginTop: 12, background: "var(--panel-2)", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "var(--text-muted)", border: "1px solid var(--border)" }}>
               종합 점수 산출 → 등급 부여 <b>S &gt; A &gt; B &gt; C</b>
@@ -198,11 +280,22 @@ export default function DiscoverPage() {
   );
 }
 
-function LogicBox({ no, title, desc, color, w }: { no: string; title: string; desc: string; color: string; w: string }) {
+function QuadrantChip({ color, label, note, count }: { color: string; label: string; note: string; count: number }) {
   return (
-    <div style={{ width: w, border: "1px solid var(--border)", borderRadius: 10, padding: "10px 11px", background: "var(--panel)" }}>
+    <span className="quad-chip">
+      <i className="quad-chip__dot" style={{ background: color }} />
+      <b>{label}</b>
+      <span className="quad-chip__note">{note}</span>
+      <span className="quad-chip__count">{fmtInt(count)}개</span>
+    </span>
+  );
+}
+
+function LogicBox({ no, title, desc, color }: { no: string; title: string; desc: string; color: string }) {
+  return (
+    <div style={{ flex: 1, minWidth: 0, border: "1px solid var(--border)", borderRadius: 10, padding: "10px 11px", background: "var(--panel)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
-        <span style={{ width: 18, height: 18, borderRadius: 5, background: color, color: "#fff", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 700 }}>{no}</span>
+        <span style={{ width: 18, height: 18, borderRadius: 5, background: color, color: "#fff", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{no}</span>
         <strong style={{ fontSize: 12.5 }}>{title}</strong>
       </div>
       <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>{desc}</div>

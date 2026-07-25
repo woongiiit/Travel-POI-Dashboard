@@ -1,5 +1,5 @@
-import type { EChartsOption } from "echarts";
-import { fmtEmission, fmtInt, fmtYm } from "./format";
+import type { EChartsOption, ScatterSeriesOption } from "echarts";
+import { fmtEmission, fmtInt, fmtNum, fmtYm } from "./format";
 
 const AXIS_COLOR = "#718096";
 const SPLIT_COLOR = "#E6ECF2";
@@ -257,59 +257,239 @@ export function treemapOption(
   };
 }
 
-/** 산점도 (방문자 vs 1인당 배출량 포지셔닝) */
+/** 포지셔닝 산점도 1개 점 (값 배열 인덱스는 SCATTER_DIM 참고) */
+export interface PositioningPoint {
+  id: string;
+  name: string;
+  sgg: string;
+  lcls: string;
+  /** 월평균 방문자 수 */
+  visitors: number;
+  /** 1인당 배출량 (kgCO₂e) */
+  perCapita: number;
+  /** 총 배출량 (tCO₂e) */
+  emission: number;
+}
+
+/** scatter data 배열 내 위치 */
+const SCATTER_DIM = { x: 0, y: 1, emission: 2, name: 3, sgg: 4, id: 5, lcls: 6 } as const;
+
+/** 사분면 표시 메타 (라벨·색상). 하단 칩 색상과 동일하게 유지 */
+export const QUADRANT_META = {
+  hiPopLowPc: { label: "고인기 · 저배출", note: "추천", color: ECO_GREEN },
+  loPopLowPc: { label: "저인기 · 저배출", note: "숨은 명소", color: DATA_BLUE },
+  hiPopHiPc: { label: "고인기 · 고배출", note: "관리 필요", color: "#E09A3E" },
+  loPopHiPc: { label: "저인기 · 고배출", note: "개선 필요", color: "#718096" },
+} as const;
+
+export type QuadrantKey = keyof typeof QUADRANT_META;
+
+export function quadrantOf(visitors: number, perCapita: number, medV: number, medPc: number): QuadrantKey {
+  const popular = visitors >= medV;
+  const lowCarbon = perCapita <= medPc;
+  if (popular && lowCarbon) return "hiPopLowPc";
+  if (popular) return "hiPopHiPc";
+  if (lowCarbon) return "loPopLowPc";
+  return "loPopHiPc";
+}
+
+/** 산점도 클릭 파라미터에서 POI id 추출 */
+export function scatterPointId(params: unknown): string | null {
+  const value = (params as { value?: unknown })?.value;
+  if (!Array.isArray(value)) return null;
+  const id = value[SCATTER_DIM.id];
+  return typeof id === "string" && id ? id : null;
+}
+
+const NICE_MANTISSA = [1, 2, 5];
+
+/** 1·2·5 × 10ⁿ 형태로 값을 내림/올림 (로그 축 눈금이 깔끔해지도록) */
+function niceLog(value: number, direction: "down" | "up"): number {
+  const exp = Math.floor(Math.log10(value));
+  const mantissa = value / 10 ** exp;
+  if (direction === "down") {
+    const m = [...NICE_MANTISSA].reverse().find((n) => n <= mantissa + 1e-9) ?? 1;
+    return m * 10 ** exp;
+  }
+  const m = NICE_MANTISSA.find((n) => n >= mantissa - 1e-9);
+  return m ? m * 10 ** exp : 10 ** (exp + 1);
+}
+
+/** 데이터 범위를 감싸는 로그 축 범위 */
+function logExtent(values: number[]): [number, number] {
+  const positives = values.filter((v) => v > 0);
+  if (!positives.length) return [1, 10];
+  return [niceLog(Math.min(...positives), "down"), niceLog(Math.max(...positives), "up")];
+}
+
+/** 배출량 규모를 로그로 압축해 버블 반경으로 변환 */
+function bubbleSize(emission: number): number {
+  return Math.max(7, Math.min(30, 7 + 3.2 * Math.log10(Math.max(emission, 1) + 1)));
+}
+
+type MarkAreaItem = NonNullable<NonNullable<ScatterSeriesOption["markArea"]>["data"]>[number];
+
+/** 사분면 배경 영역 데이터 1건 */
+function quadrantArea(
+  x: [number, number],
+  y: [number, number],
+  color: string,
+  text: string,
+  position: "insideTopLeft" | "insideTopRight" | "insideBottomLeft" | "insideBottomRight",
+): MarkAreaItem {
+  return [
+    {
+      xAxis: x[0],
+      yAxis: y[0],
+      itemStyle: { color },
+      label: {
+        show: true,
+        formatter: text,
+        position,
+        distance: 8,
+        color: "#94A3B8",
+        fontSize: 10.5,
+        fontWeight: 600,
+      },
+    },
+    { xAxis: x[1], yAxis: y[1] },
+  ];
+}
+
+/**
+ * 산점도 (월평균 방문자 vs 1인당 배출량 포지셔닝)
+ * - 두 축 모두 로그 스케일: 방문자·1인당 배출량 모두 롱테일 분포라 선형 축에서는 판독 불가
+ * - 사분면별 대표 POI만 받아 그리며, 색상은 사분면 기준 (하단 칩과 동일)
+ */
 export function scatterOption(
-  points: Array<{ name: string; visitors: number; perCapita: number; emission: number; color: string }>,
+  points: PositioningPoint[],
   medianVisitors: number,
   medianPerCapita: number,
 ): EChartsOption {
+  const [xMin, xMax] = logExtent(points.map((p) => p.visitors));
+  const [yMin, yMax] = logExtent(points.map((p) => p.perCapita));
+  // 로그 축에서 0 이하 좌표는 그릴 수 없으므로 기준선을 축 범위 안으로 제한
+  const medX = Math.min(Math.max(medianVisitors, xMin), xMax);
+  const medY = Math.min(Math.max(medianPerCapita, yMin), yMax);
+
+  const byQuadrant = new Map<QuadrantKey, Array<Array<number | string>>>();
+  for (const p of points) {
+    const q = quadrantOf(p.visitors, p.perCapita, medianVisitors, medianPerCapita);
+    const bucket = byQuadrant.get(q) ?? [];
+    bucket.push([p.visitors, p.perCapita, p.emission, p.name, p.sgg, p.id, p.lcls]);
+    byQuadrant.set(q, bucket);
+  }
+
   return {
     textStyle: { fontFamily: FONT },
-    grid: { left: 8, right: 16, top: 16, bottom: 36, containLabel: true },
+    grid: { left: 8, right: 20, top: 22, bottom: 40, containLabel: true },
     tooltip: {
       trigger: "item",
+      confine: true,
       formatter: (p: unknown) => {
-        const d = (p as { data: { name: string; value: number[] } }).data;
-        return `<b>${d.name}</b><br/>월평균 방문자 ${fmtInt(d.value[0])}명<br/>1인당 ${d.value[1]} kgCO₂e<br/>총배출 ${fmtEmission(d.value[2])} tCO₂e`;
+        const d = (p as { seriesName: string; value: Array<number | string>; color: string });
+        const v = d.value;
+        return [
+          `<b>${v[SCATTER_DIM.name]}</b> <span style="color:#94A3B8">${v[SCATTER_DIM.sgg]} · ${v[SCATTER_DIM.lcls]}</span>`,
+          `월평균 방문자 <b>${fmtInt(Number(v[SCATTER_DIM.x]))}</b> 명`,
+          `1인당 배출 <b>${fmtNum(Number(v[SCATTER_DIM.y]), 2)}</b> kgCO₂e`,
+          `총 배출량 <b>${fmtEmission(Number(v[SCATTER_DIM.emission]))}</b> tCO₂e`,
+          `<span style="color:${d.color}">■</span> ${d.seriesName}`,
+          `<span style="color:#A0AEC0;font-size:11px">클릭하면 상세 화면으로 이동</span>`,
+        ].join("<br/>");
       },
     },
     xAxis: {
       type: "log",
+      min: xMin,
+      max: xMax,
       name: "월평균 방문자 수 (명)",
       nameLocation: "middle",
       nameGap: 26,
       nameTextStyle: { color: AXIS_COLOR, fontSize: 11 },
       axisLabel: { color: AXIS_COLOR, fontSize: 10, formatter: (v: number) => fmtEmission(v) },
+      axisLine: { lineStyle: { color: SPLIT_COLOR } },
+      axisTick: { show: false },
       splitLine: { lineStyle: { color: SPLIT_COLOR } },
     },
     yAxis: {
-      type: "value",
+      type: "log",
+      min: yMin,
+      max: yMax,
       name: "1인당 배출 (kgCO₂e)",
+      nameLocation: "middle",
+      nameRotate: 90,
+      nameGap: 42,
       nameTextStyle: { color: AXIS_COLOR, fontSize: 11 },
-      axisLabel: { color: AXIS_COLOR, fontSize: 10 },
+      axisLabel: {
+        color: AXIS_COLOR,
+        fontSize: 10,
+        formatter: (v: number) => (v >= 1 ? fmtEmission(v) : String(Number(v.toPrecision(2)))),
+      },
       splitLine: { lineStyle: { color: SPLIT_COLOR } },
     },
+    dataZoom: [
+      { type: "inside", xAxisIndex: 0, filterMode: "none", zoomOnMouseWheel: "ctrl", moveOnMouseMove: true },
+      { type: "inside", yAxisIndex: 0, filterMode: "none", zoomOnMouseWheel: "ctrl", moveOnMouseMove: true },
+    ],
     series: [
       {
+        // 사분면 배경·중앙값 기준선 전용 (범례에 노출되지 않음)
+        name: "__guide",
         type: "scatter",
-        symbolSize: (val: any) => Math.max(6, Math.min(40, Math.sqrt(val[2]) / 4)),
-        itemStyle: { opacity: 0.62 },
-        data: points.map((p) => ({
-          name: p.name,
-          value: [p.visitors, p.perCapita, p.emission],
-          itemStyle: { color: p.color },
-        })),
+        data: [],
+        silent: true,
+        tooltip: { show: false },
+        markArea: {
+          silent: true,
+          data: [
+            quadrantArea([xMin, medX], [medY, yMax], "rgba(113,128,150,0.05)", "저인기 · 고배출", "insideTopLeft"),
+            quadrantArea([medX, xMax], [medY, yMax], "rgba(224,154,62,0.07)", "고인기 · 고배출", "insideTopRight"),
+            quadrantArea([xMin, medX], [yMin, medY], "rgba(75,131,229,0.06)", "저인기 · 저배출 (숨은 명소)", "insideBottomLeft"),
+            quadrantArea([medX, xMax], [yMin, medY], "rgba(45,155,106,0.10)", "고인기 · 저배출 (추천)", "insideBottomRight"),
+          ],
+        },
         markLine: {
           silent: true,
           symbol: "none",
-          lineStyle: { color: "#D4DEE8", type: "dashed" },
-          label: { color: "#A0AEC0", fontSize: 10 },
+          lineStyle: { color: "#C6D2DE", type: "dashed", width: 1 },
+          label: { color: "#A0AEC0", fontSize: 10, rotate: 0 },
           data: [
-            { xAxis: medianVisitors, label: { formatter: "방문 중앙값" } },
-            { yAxis: medianPerCapita, label: { formatter: "배출 중앙값" } },
+            { xAxis: medX, label: { formatter: "방문 중앙값", position: "insideEndTop" } },
+            { yAxis: medY, label: { formatter: "배출 중앙값", position: "insideStartTop" } },
           ],
         },
       },
+      ...(Object.keys(QUADRANT_META) as QuadrantKey[]).map((q) => {
+        const meta = QUADRANT_META[q];
+        return {
+          name: `${meta.label} (${meta.note})`,
+          type: "scatter" as const,
+          data: byQuadrant.get(q) ?? [],
+          symbolSize: (val: Array<number | string>) => bubbleSize(Number(val[SCATTER_DIM.emission])),
+          itemStyle: {
+            color: meta.color,
+            opacity: 0.78,
+            borderColor: "#ffffff",
+            borderWidth: 1,
+          },
+          label: {
+            show: true,
+            position: "right" as const,
+            distance: 5,
+            fontSize: 10,
+            color: "#475569",
+            formatter: (p: { value: unknown }) =>
+              Array.isArray(p.value) ? String(p.value[SCATTER_DIM.name]) : "",
+          },
+          labelLayout: { hideOverlap: true },
+          emphasis: {
+            scale: 1.3,
+            itemStyle: { opacity: 1, borderColor: "#14263D", borderWidth: 1.2 },
+            label: { fontWeight: "bold" as const },
+          },
+        };
+      }),
     ],
   };
 }

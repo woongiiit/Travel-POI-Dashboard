@@ -742,11 +742,258 @@ button {
   width: 100%;
 }
 
+/* 포지셔닝 산점도 사분면 범례 */
+.quad-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.quad-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.quad-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.quad-chip__note {
+  color: var(--text-muted);
+}
+
+.quad-chip__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.quad-shuffle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.quad-shuffle:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 .insight {
   display: flex;
   gap: 12px;
   padding: 12px 0;
   border-bottom: 1px dashed var(--border);
+}
+
+/* 상단 AI 인사이트 요약 배너 */
+.ai-summary {
+  background: linear-gradient(135deg, #f3faf7 0%, #eef5fc 100%);
+  border: 1px solid #d7e8df;
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 4px;
+}
+
+.ai-summary__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ai-summary__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--teal-soft);
+  color: var(--teal);
+  flex-shrink: 0;
+}
+
+.ai-summary__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ai-summary__scope {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--teal);
+  background: rgba(11, 90, 74, 0.08);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.ai-summary__head .quad-shuffle {
+  margin-left: 0;
+}
+
+.ai-summary__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-summary__body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.ai-summary__body p + p {
+  color: var(--text-muted);
+}
+
+.ai-summary__block {
+  margin-top: 12px;
+}
+
+.ai-summary__subtitle {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--teal);
+}
+
+.ai-summary__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+}
+
+@media (min-width: 1100px) {
+  .ai-summary__list {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.ai-summary__list li {
+  min-width: 0;
+}
+
+.ai-summary__poi {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid rgba(11, 90, 74, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ai-summary__poi:hover {
+  border-color: var(--teal);
+  background: #fff;
+}
+
+.ai-summary__poi-region {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--teal);
+}
+
+.ai-summary__poi-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.ai-summary__poi-meta {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.ai-summary__courses {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-summary__courses li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(11, 90, 74, 0.12);
+}
+
+.ai-summary__course-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--teal);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.ai-summary__course-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ai-summary__course-body strong {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.ai-summary__course-path {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  word-break: keep-all;
 }
 .insight:last-child {
   border-bottom: none;
