@@ -201,7 +201,7 @@ function RegionPageContent() {
             <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="선택 POI 탄소배출량" value={fmtEmission(selected.e)} unit="tCO₂e"
               sub={<span className={selected.pc <= 1 ? "down" : "up"}>{selected.pc <= 1 ? "저배출" : "고배출"} · 1인당 {fmtNum(selected.pc, 2)}kg</span>} />
             <Kpi variant="blue" icon={<AppIcon icon={Users} />} label="총 방문자 수" value={fmtInt(selected.v)} unit="명"
-              sub={`현지인 ${fmtInt(selected.vL)} · 외지인 ${fmtInt(selected.vO)}`} />
+              sub={`월평균 ${fmtInt(selected.v / meta.nMonths)}명`} />
             <Kpi variant="purple" icon={<AppIcon icon={Award} />} label="전국 POI 배출 순위" value={`상위 ${rankPct(pois, selected)}%`}
               sub={`${fmtInt(pois.length)}개 중`} />
             <Kpi variant="amber" icon={<AppIcon icon={Tags} />} label="카테고리" value={selected.lcls}
@@ -239,7 +239,14 @@ function RegionPageContent() {
                       />
                     </>
                   ) : (
-                    <AppIcon icon={Tags} size={28} style={{ color: lclsColor(selected.lcls) }} />
+                    <div className="poi-photo-empty">
+                      <AppIcon icon={Tags} size={22} style={{ color: lclsColor(selected.lcls) }} />
+                      <span>
+                        {detail?.source === "fallback"
+                          ? "이미지를 불러올 수 없음"
+                          : "등록된 이미지 없음"}
+                      </span>
+                    </div>
                   )}
                 </div>
                 <div style={{ minWidth: 0 }}>
@@ -256,14 +263,16 @@ function RegionPageContent() {
                 <MiniStat label="탄소배출량(총)" value={`${fmtEmission(selected.e)} tCO₂e`} note={`1인당 ${fmtNum(selected.pc, 2)} kgCO₂e`} />
                 <MiniStat label="월평균 방문자" value={`${fmtInt(selected.v / meta.nMonths)} 명`} note={`총 ${fmtInt(selected.v)}명`} />
               </div>
-              {detail?.source === "fallback" && detail.error?.includes("KTO_SERVICE_KEY") && (
+              {detail?.source === "fallback" && (
                 <div style={{ marginTop: 8, fontSize: 10.5, color: "var(--text-faint)" }}>
-                  ※ 한국관광공사 API 키(KTO_SERVICE_KEY) 설정 후 서버를 재시작하면 사진·주소가 표시됩니다.
+                  {detail.error?.includes("KTO_SERVICE_KEY")
+                    ? "※ 한국관광공사 API 키(KTO_SERVICE_KEY) 설정 후 서버를 재시작하면 사진·주소가 표시됩니다."
+                    : `※ 관광공사 API에서 상세 정보를 가져오지 못했습니다${detail.error ? ` (${detail.error})` : ""}.`}
                 </div>
               )}
               {detail?.source === "kto" && !detail.image && (
                 <div style={{ marginTop: 8, fontSize: 10.5, color: "var(--text-faint)" }}>
-                  ※ 이 POI는 한국관광공사 API에 등록된 대표 이미지가 없습니다.
+                  ※ 한국관광공사 API에 등록된 대표 이미지가 없어 기본 안내를 표시합니다.
                 </div>
               )}
             </Card>

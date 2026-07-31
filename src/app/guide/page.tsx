@@ -28,6 +28,23 @@ import { fmtInt, fmtNum } from "@/lib/format";
 
 const LEVELS = ["매우높음", "높음", "보통", "낮음", "매우낮음"];
 
+/** 여행자 유형별 대분류 가중치 — 추천 점수에 곱해짐 */
+const TRAVELER_LCLS_WEIGHT: Record<string, Record<string, number>> = {
+  "가족 여행": { 자연관광: 1.45, 체험관광: 1.35, 문화관광: 1.1, 레저스포츠: 1.15, 역사관광: 1.05 },
+  "커플 여행": { 문화관광: 1.35, 자연관광: 1.3, 음식: 1.25, 쇼핑: 1.1, 역사관광: 1.15 },
+  "나홀로 여행": { 문화관광: 1.3, 역사관광: 1.35, 자연관광: 1.25, 체험관광: 1.1 },
+  "친구 여행": { 레저스포츠: 1.4, 체험관광: 1.35, 음식: 1.2, 쇼핑: 1.15, 자연관광: 1.1 },
+  "시니어 여행": { 역사관광: 1.4, 문화관광: 1.3, 자연관광: 1.25, 음식: 1.1 },
+};
+
+const TRAVELER_HINT: Record<string, string> = {
+  "가족 여행": "자연·체험 카테고리에 가중치를 두어 아이들이 함께하기 좋은 저탄소 코스를 우선합니다.",
+  "커플 여행": "문화·자연·미식 카테고리에 가중치를 두어 여유로운 저탄소 일정을 우선합니다.",
+  "나홀로 여행": "문화·역사·자연 카테고리에 가중치를 두어 혼자 둘러보기 좋은 저탄소 코스를 우선합니다.",
+  "친구 여행": "레저·체험 카테고리에 가중치를 두어 함께 즐기기 좋은 저탄소 활동을 우선합니다.",
+  "시니어 여행": "역사·문화·자연 카테고리에 가중치를 두어 무리 없는 저탄소 코스를 우선합니다.",
+};
+
 export default function GuidePage() {
   const { meta, pois, loading, error } = useDataset();
   const [sido, setSido] = useState("");
@@ -53,8 +70,13 @@ export default function GuidePage() {
     const lclsGroups = groupBy(regionPois, ALL, (p) => p.lcls);
     const medPc = regionPois.map((p) => p.pc).sort((a, b) => a - b)[Math.floor(regionPois.length / 2)] ?? 1;
 
+    const weights = TRAVELER_LCLS_WEIGHT[travelerType] ?? {};
     const scored = regionPois
-      .map((p) => ({ p, score: (medPc / Math.max(p.pc, 0.05)) * Math.log10(Math.max(p.v / meta.nMonths, 1)) }))
+      .map((p) => {
+        const base = (medPc / Math.max(p.pc, 0.05)) * Math.log10(Math.max(p.v / meta.nMonths, 1));
+        const w = weights[p.lcls] ?? 1;
+        return { p, score: base * w };
+      })
       .sort((a, b) => b.score - a.score)
       .map((x) => x.p);
 
@@ -64,7 +86,7 @@ export default function GuidePage() {
     const rep = course[0] ?? scored[0];
 
     return { regionPois, totV, totE, regionPc, ratio, levelIdx, lclsGroups, course, similar, rep, empty: false };
-  }, [meta, pois, sido, sgg, nationalPc]);
+  }, [meta, pois, sido, sgg, nationalPc, travelerType]);
 
   if (loading) return (<><PageHeader title="AI 여행자 가이드" /><LoadingState /></>);
   if (error || !meta) return (<><PageHeader title="AI 여행자 가이드" /><ErrorState message={error ?? "오류"} /></>);
@@ -96,6 +118,14 @@ export default function GuidePage() {
         onSido={(v) => { setSido(v); setSgg(ALL); }} onSgg={setSgg} onType={setTravelerType} />
 
       <div className="content">
+        <div className="traveler-hint">
+          <AppIcon icon={Users} size={14} />
+          <span>
+            <b>{travelerType}</b> — {TRAVELER_HINT[travelerType] ?? "선택한 유형에 맞춰 추천 순서를 조정합니다."}
+            {" "}추천 코스·유사 POI·대표 POI에 반영됩니다.
+          </span>
+        </div>
+
         <div className="kpi-row">
           <Kpi
             variant={data.levelIdx >= 3 ? "green" : data.levelIdx <= 1 ? "red" : "amber"}
@@ -106,7 +136,7 @@ export default function GuidePage() {
           />
           <Kpi variant="teal" icon={<AppIcon icon={Tags} />} label="대표 저탄소 POI"
             value={<span style={{ fontSize: 16 }}>{data.rep.nm}</span>} sub={`1인당 ${fmtNum(data.rep.pc, 2)} kgCO₂e`} />
-          <Kpi variant="blue" icon={<AppIcon icon={Compass} />} label="추천 저탄소 코스 수" value={data.course.length} unit="개" sub="맞춤형 코스" />
+            <Kpi variant="blue" icon={<AppIcon icon={Compass} />} label="추천 저탄소 코스 수" value={data.course.length} unit="개" sub={`${travelerType} 맞춤`} />
           <Kpi variant="green" icon={<AppIcon icon={TrendingDown} />} label="저탄소 POI 비중"
             value={fmtNum((data.regionPois.filter((p) => p.pc <= 1).length / data.regionPois.length) * 100, 0)} unit="%"
             sub={`${fmtInt(data.regionPois.length)}개 중`} />
@@ -131,7 +161,7 @@ export default function GuidePage() {
             ))}
           </Card>
 
-          <Card title="③ 추천 코스 / 대체 POI" foot="※ 저탄소 POI 중심 · 대중교통·도보 이용 권장">
+            <Card title="③ 추천 코스 / 대체 POI" foot={`※ ${travelerType} 가중 + 저탄소 POI 중심 · 대중교통·도보 권장`}>
             <div style={{ position: "relative", paddingLeft: 8 }}>
               {data.course.map((p, i) => (
                 <div key={p.id} style={{ display: "flex", gap: 10, marginBottom: 12 }}>

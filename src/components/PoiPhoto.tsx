@@ -64,7 +64,10 @@ export function PoiPhoto({
         // eslint-disable-next-line @next/next/no-img-element
         <img src={detail.image} alt={alt} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
       ) : (
-        fallbackIcon
+        <div className="poi-photo-empty" style={{ height: "100%" }}>
+          {fallbackIcon}
+          <span>등록된 이미지 없음</span>
+        </div>
       )}
     </div>
   );

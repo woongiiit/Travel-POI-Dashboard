@@ -34,7 +34,7 @@ export default function CategoryPage() {
   const [sido, setSido] = useState<string>(ALL);
   const [lcls, setLcls] = useState<string>(ALL);
   const [mcls, setMcls] = useState<string>(ALL);
-  const [nati, setNati] = useState<Nati>(ALL);
+  const nati: Nati = ALL;
   const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
 
   useEffect(() => { loadMonthly().then(setMonthly); }, [loadMonthly]);
@@ -45,7 +45,7 @@ export default function CategoryPage() {
     const selPois = applyFilters(regionPois, { sido, sgg: ALL, lcls, mcls, nati } as Filters);
     const totalRegionE = regionPois.reduce((s, p) => s + poiEmission(p, nati), 0);
     const selE = selPois.reduce((s, p) => s + poiEmission(p, nati), 0);
-    const selV = selPois.reduce((s, p) => s + (nati === "현지인" ? p.vL : nati === "외지인" ? p.vO : p.v), 0);
+    const selV = selPois.reduce((s, p) => s + p.v, 0);
     const lclsGroups = groupBy(regionPois, nati, (p) => p.lcls);
     const mclsGroups = groupBy(regionPois, nati, (p) => p.mcls, (p) => p.mcls);
     return { regionPois, selPois, totalRegionE, selE, selV, lclsGroups, mclsGroups };
@@ -101,7 +101,6 @@ export default function CategoryPage() {
         <Select label="지역" icon={<AppIcon icon={MapPin} size={14} />} value={sido} options={[ALL, ...meta.filters.sido]} onChange={setSido} />
         <Select label="대분류" icon={<AppIcon icon={Tags} size={14} />} value={lcls} options={[ALL, ...meta.filters.lcls]} onChange={(v) => { setLcls(v); setMcls(ALL); }} />
         <Select label="중분류" icon={<AppIcon icon={PieChart} size={14} />} value={mcls} options={mclsOptions} onChange={setMcls} />
-        <Select label="방문객 유형" icon={<AppIcon icon={Users} size={14} />} value={nati} options={meta.filters.nati} onChange={(v) => setNati(v as Nati)} />
         <div style={{ marginLeft: "auto", alignSelf: "flex-end", fontSize: 11, color: "var(--text-faint)" }}>
           {scope} · {catLabel}
         </div>

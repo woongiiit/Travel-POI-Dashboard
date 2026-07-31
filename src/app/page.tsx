@@ -138,7 +138,7 @@ export default function HomePage() {
         title="전국 POI 현황"
         subtitle="KT 통신데이터 기반 관광 관심지점(POI) 탄소배출량 대시보드"
       />
-      <FilterBar meta={meta} filters={filters} onChange={setFilters} />
+      <FilterBar meta={meta} filters={filters} onChange={setFilters} show={["sido", "sgg", "lcls", "mcls"]} />
 
       <div className="content">
         <section className="ai-summary" aria-label="AI 인사이트 요약">
@@ -208,7 +208,7 @@ export default function HomePage() {
 
         <div className="grid" style={{ gridTemplateColumns: "1.35fr 1.25fr 0.9fr" }}>
           <Card title={`${scopeLabel} POI 분포도`} unit="원 크기=방문자, 색상=배출량">
-            <MapView points={points} height={420} maxEmission={maxE} onSelect={handleMapSelect} />
+            <MapView points={points} height={420} maxEmission={maxE} cluster onSelect={handleMapSelect} />
           </Card>
 
           <Card title="탄소배출량 Top 10 POI" foot="※ 선택한 필터 기준으로 집계됩니다.">

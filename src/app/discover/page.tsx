@@ -198,15 +198,14 @@ export default function DiscoverPage() {
 
         <div className="grid" style={{ gridTemplateColumns: "1.25fr 1fr" }}>
           <Card
-            title="POI 인기(방문자) 대비 탄소배출 포지셔닝"
-            unit={`사분면별 대표 ${SAMPLE_PER_QUADRANT}개 무작위 · 버블=총 배출량 · 양축 로그`}
+            title="POI 인기 대비 탄소배출 포지셔닝"
             right={
               <button type="button" className="quad-shuffle" onClick={reshuffle}>
                 <AppIcon icon={Shuffle} size={12} />
                 다시 뽑기
               </button>
             }
-            foot="※ 표시되는 POI는 사분면별 무작위 표본이며 [다시 뽑기]로 교체할 수 있습니다. 칩의 건수는 필터 전체 기준입니다. 버블 클릭 시 상세 화면으로 이동합니다."
+            foot={`※ 사분면별 대표 ${SAMPLE_PER_QUADRANT}개 무작위 · 버블=총 배출량 · 양축 로그. 표시 POI는 표본이며 [다시 뽑기]로 교체할 수 있습니다. 칩 건수는 필터 전체 기준. 버블 클릭 시 상세로 이동합니다.`}
           >
             {scatterConfig && (
               <EChart option={scatterConfig} height={420} onEvents={{ click: handleScatterSelect }} />
@@ -236,7 +235,7 @@ export default function DiscoverPage() {
                       <td><span className="rank">{i + 1}</span></td>
                       <td style={{ fontWeight: 600 }}>{p.nm}</td>
                       <td className="muted">{p.sgg}</td>
-                      <td className="muted">{p.mcls}</td>
+                      <td className="muted tbl-mcls" title={p.mcls}>{p.mcls}</td>
                       <td className="num">{fmtNum(p.pc, 2)}</td>
                       <td><span className={`grade grade--${p.grade}`}>{p.grade}</span></td>
                     </tr>

@@ -19,7 +19,7 @@ export function FilterBar({
   meta,
   filters,
   onChange,
-  show = ["sido", "sgg", "lcls", "mcls", "nati"],
+  show = ["sido", "sgg", "lcls", "mcls"],
   children,
 }: Props) {
   const sggOptions =

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { Map as MlMap, GeoJSONSource } from "maplibre-gl";
+import type { Map as MlMap, GeoJSONSource, MapLayerMouseEvent } from "maplibre-gl";
 import { fmtInt, fmtEmission } from "@/lib/format";
 
 export interface MapPoint {
@@ -23,10 +23,13 @@ interface Props {
   zoom?: number;
   /** 색상 기준 최대 배출량 (없으면 자동) */
   maxEmission?: number;
+  /** 저줌에서 포인트 클러스터링 (전국 지도 등) */
+  cluster?: boolean;
   onSelect?: (id: string) => void;
 }
 
-const STYLE = "https://demotiles.maplibre.org/style.json";
+/** OpenFreeMap Liberty — 도로·지명이 있는 무료 벡터 베이스맵 */
+const STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
 function toGeoJSON(points: MapPoint[]) {
   return {
@@ -52,13 +55,16 @@ export function MapView({
   center = [127.8, 36.2],
   zoom = 5.7,
   maxEmission,
+  cluster = false,
   onSelect,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const readyRef = useRef(false);
   const onSelectRef = useRef(onSelect);
+  const clusterRef = useRef(cluster);
   onSelectRef.current = onSelect;
+  clusterRef.current = cluster;
 
   useEffect(() => {
     let map: MlMap | null = null;
@@ -72,7 +78,7 @@ export function MapView({
         style: STYLE,
         center,
         zoom,
-        attributionControl: false,
+        attributionControl: { compact: true },
       });
       mapRef.current = map;
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
@@ -81,9 +87,49 @@ export function MapView({
 
       map.on("load", () => {
         if (!map) return;
-        map.addSource("pois", { type: "geojson", data: toGeoJSON(points) });
-
         const max = maxEmission ?? Math.max(1, ...points.map((p) => p.emission));
+
+        map.addSource("pois", {
+          type: "geojson",
+          data: toGeoJSON(points),
+          ...(clusterRef.current
+            ? { cluster: true, clusterMaxZoom: 12, clusterRadius: 52 }
+            : {}),
+        });
+
+        if (clusterRef.current) {
+          map.addLayer({
+            id: "poi-clusters",
+            type: "circle",
+            source: "pois",
+            filter: ["has", "point_count"],
+            paint: {
+              "circle-color": [
+                "step", ["get", "point_count"],
+                "#4B83E5", 25, "#7A72D8", 80, "#E09A3E", 200, "#D64545",
+              ],
+              "circle-radius": [
+                "step", ["get", "point_count"],
+                16, 25, 22, 80, 28, 200, 34,
+              ],
+              "circle-opacity": 0.88,
+              "circle-stroke-width": 1.5,
+              "circle-stroke-color": "#ffffff",
+            },
+          });
+          map.addLayer({
+            id: "poi-cluster-count",
+            type: "symbol",
+            source: "pois",
+            filter: ["has", "point_count"],
+            layout: {
+              "text-field": ["get", "point_count_abbreviated"],
+              "text-size": 12,
+            },
+            paint: { "text-color": "#ffffff" },
+          });
+        }
+
         map.addLayer({
           id: "poi-circles",
           type: "circle",
@@ -91,7 +137,7 @@ export function MapView({
           paint: {
             "circle-radius": [
               "interpolate", ["linear"], ["get", "visitors"],
-              0, 3, max * 1000, 16,
+              0, 4, 1e5, 10, 1e6, 16,
             ],
             "circle-color": [
               "interpolate", ["linear"], ["get", "emission"],
@@ -101,18 +147,21 @@ export function MapView({
               max * 0.55, "#E09A3E",
               max * 0.8, "#D64545",
             ],
-            "circle-opacity": 0.82,
-            "circle-stroke-width": ["case", ["==", ["get", "highlight"], 1], 2.5, 0.5],
+            "circle-opacity": 0.85,
+            "circle-stroke-width": ["case", ["==", ["get", "highlight"], 1], 2.5, 0.8],
             "circle-stroke-color": ["case", ["==", ["get", "highlight"], 1], "#0B5A4A", "#ffffff"],
           },
         });
+        if (clusterRef.current) {
+          map.setFilter("poi-circles", ["!", ["has", "point_count"]]);
+        }
 
-        map.on("mouseenter", "poi-circles", (e) => {
+        const showPopup = (e: MapLayerMouseEvent) => {
           map!.getCanvas().style.cursor = "pointer";
           const f = e.features?.[0];
-          if (!f) return;
+          if (!f || f.properties?.point_count) return;
           const p = f.properties as Record<string, string>;
-          const coords = (f.geometry as unknown as { coordinates: [number, number] }).coordinates;
+          const coords = (f.geometry as unknown as { coordinates: [number, number] }).coordinates.slice() as [number, number];
           const clickHint = onSelectRef.current
             ? `<br/><span style="color:#4B83E5;font-size:11px">클릭하면 상세 화면으로 이동</span>`
             : "";
@@ -125,7 +174,9 @@ export function MapView({
                 clickHint,
             )
             .addTo(map!);
-        });
+        };
+
+        map.on("mouseenter", "poi-circles", showPopup);
         map.on("mouseleave", "poi-circles", () => {
           map!.getCanvas().style.cursor = "";
           popup.remove();
@@ -134,6 +185,24 @@ export function MapView({
           const id = e.features?.[0]?.properties?.id as string;
           if (id && onSelectRef.current) onSelectRef.current(id);
         });
+
+        if (clusterRef.current) {
+          map.on("click", "poi-clusters", async (e) => {
+            const features = map!.queryRenderedFeatures(e.point, { layers: ["poi-clusters"] });
+            const clusterId = features[0]?.properties?.cluster_id as number | undefined;
+            const src = map!.getSource("pois") as GeoJSONSource;
+            if (clusterId == null) return;
+            const zoomTo = await src.getClusterExpansionZoom(clusterId);
+            const coords = (features[0].geometry as unknown as { coordinates: [number, number] }).coordinates;
+            map!.easeTo({ center: coords, zoom: zoomTo });
+          });
+          map.on("mouseenter", "poi-clusters", () => {
+            map!.getCanvas().style.cursor = "pointer";
+          });
+          map.on("mouseleave", "poi-clusters", () => {
+            map!.getCanvas().style.cursor = "";
+          });
+        }
 
         readyRef.current = true;
       });
@@ -154,8 +223,14 @@ export function MapView({
     if (!map || !readyRef.current) return;
     const src = map.getSource("pois") as GeoJSONSource | undefined;
     if (src) src.setData(toGeoJSON(points));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points]);
+
+  // 선택 POI 변경 시 카메라 이동
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current || !center) return;
+    map.easeTo({ center, zoom, duration: 600 });
+  }, [center?.[0], center?.[1], zoom]);
 
   return (
     <div
