@@ -137,15 +137,16 @@ function courseTheme(lclsList: string[]): string {
 }
 
 /**
- * 전국(필터 무시) 기준 AI 인사이트:
- * - 17개 시도를 아우르는 핵심 저탄소 콘텐츠 10개
- * - 추천 여행 코스 옵션 경로 3개
- * seed가 바뀌면 구성이 달라짐 (세션·다시 뽑기).
+ * 저탄소 콘텐츠·추천 코스 AI 인사이트.
+ * - 핵심 저탄소 콘텐츠 최대 10개 (시도 라운드로빈)
+ * - 추천 여행 코스 옵션 경로 최대 3개
+ * seed가 바뀌면 구성이 달라짐 (세션·다시 뽑기·필터적용).
  */
 export function buildNationalAiInsight(
   pois: Poi[],
   nMonths: number,
   seed: number,
+  scopeLabel = "전국(전체 조건)",
 ): NationalAiInsight {
   const rand = mulberry32(seed);
   const months = Math.max(nMonths, 1);
@@ -163,6 +164,16 @@ export function buildNationalAiInsight(
       monthlyVisitors: p.v / months,
       score: Math.log10(Math.max(p.v / months, 1)) / Math.max(p.pc, 0.05),
     }));
+
+  if (!candidates.length) {
+    return {
+      contents: [],
+      courses: [],
+      intro: [
+        `${scopeLabel} 조건에 해당하는 저탄소 POI가 없습니다. 필터를 넓혀 [필터적용]을 다시 눌러 주세요.`,
+      ],
+    };
+  }
 
   // 시도별 상위 후보 (점수 순)
   const bySido = new Map<string, typeof candidates>();
@@ -240,8 +251,8 @@ export function buildNationalAiInsight(
 
   const sidoCovered = new Set(picked.map((p) => p.sido)).size;
   const intro = [
-    `전국(전체 시도·시군구·분류·방문객) 기준으로 17개 시도 중 ${sidoCovered}개 시도를 아우르는 핵심 저탄소 콘텐츠 ${picked.length}곳을 선정했습니다.`,
-    `같은 조건에서 추천 여행 코스 ${courses.length}개 옵션 경로를 구성했습니다. 다시 뽑기마다 구성이 달라집니다.`,
+    `${scopeLabel} 기준으로 ${sidoCovered}개 시도를 아우르는 핵심 저탄소 콘텐츠 ${picked.length}곳을 선정했습니다.`,
+    `같은 조건에서 추천 여행 코스 ${courses.length}개 옵션 경로를 구성했습니다. [다시 뽑기]로 구성을 바꿀 수 있고, [필터적용]으로 상단 검색 조건을 반영합니다.`,
   ];
 
   return { contents: picked, courses, intro };

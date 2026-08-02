@@ -7,6 +7,7 @@ import {
   BarChart3,
   Building2,
   Cloud,
+  Filter,
   Leaf,
   Map,
   MapPin,
@@ -46,9 +47,14 @@ export default function HomePage() {
   const { meta, pois, loading, error, loadMonthly } = useDataset();
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
-  // AI 요약은 필터와 무관 — 세션마다·다시 뽑기마다 구성이 바뀜
+  // AI 요약에 실제로 반영된 필터 (상단 필터와 분리 — [필터적용] 시에만 동기화)
+  const [aiFilters, setAiFilters] = useState<Filters>(defaultFilters);
   const [aiSeed, setAiSeed] = useState(() => Math.floor(Math.random() * 2 ** 31));
   const reshuffleAi = useCallback(() => setAiSeed(Math.floor(Math.random() * 2 ** 31)), []);
+  const applyAiFilters = useCallback(() => {
+    setAiFilters(filters);
+    setAiSeed(Math.floor(Math.random() * 2 ** 31));
+  }, [filters]);
 
   useEffect(() => {
     loadMonthly().then(setMonthly);
@@ -88,11 +94,13 @@ export default function HomePage() {
     return monthlySeries(view.filtered, monthly, meta.nMonths, filters.nati);
   }, [meta, monthly, view, filters.nati]);
 
-  // 필터와 무관하게 전국 전체 기준
+  const aiScopeLabel = useMemo(() => formatAiScope(aiFilters), [aiFilters]);
+
   const aiInsight = useMemo(() => {
     if (!meta) return null;
-    return buildNationalAiInsight(pois, meta.nMonths, aiSeed);
-  }, [meta, pois, aiSeed]);
+    const pool = applyFilters(pois, aiFilters);
+    return buildNationalAiInsight(pool, meta.nMonths, aiSeed, aiScopeLabel);
+  }, [meta, pois, aiFilters, aiSeed, aiScopeLabel]);
 
   const scopeLabel =
     filters.sido === ALL ? "전국" : filters.sgg === ALL ? filters.sido : `${filters.sido} ${filters.sgg}`;
@@ -147,10 +155,14 @@ export default function HomePage() {
               <AppIcon icon={Sparkles} size={16} />
             </span>
             <h2 className="ai-summary__title">AI 인사이트 요약</h2>
-            <span className="ai-summary__scope">전국 · 전체 조건</span>
+            <span className="ai-summary__scope">{aiScopeLabel}</span>
             <button type="button" className="quad-shuffle" onClick={reshuffleAi}>
               <AppIcon icon={Shuffle} size={12} />
               다시 뽑기
+            </button>
+            <button type="button" className="ai-filter-apply" onClick={applyAiFilters}>
+              <AppIcon icon={Filter} size={12} />
+              필터적용
             </button>
           </div>
           {aiInsight && (
@@ -289,6 +301,17 @@ export default function HomePage() {
       </div>
     </>
   );
+}
+
+function formatAiScope(f: Filters): string {
+  const parts: string[] = [];
+  if (f.sido === ALL) parts.push("전국");
+  else if (f.sgg === ALL) parts.push(f.sido);
+  else parts.push(`${f.sido} ${f.sgg}`);
+  if (f.lcls !== ALL) parts.push(f.lcls);
+  if (f.mcls !== ALL) parts.push(f.mcls);
+  if (parts.length === 1 && parts[0] === "전국") return "전국 · 전체 조건";
+  return parts.join(" · ");
 }
 
 function SidoBars({ groups }: { groups: { label: string; emission: number }[] }) {

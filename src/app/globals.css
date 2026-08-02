@@ -813,6 +813,27 @@ button {
   color: var(--text);
 }
 
+.ai-filter-apply {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border: 1px solid var(--green);
+  border-radius: 8px;
+  background: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.ai-filter-apply:hover {
+  background: #248a5c;
+  border-color: #248a5c;
+}
+
 .insight {
   display: flex;
   gap: 12px;
