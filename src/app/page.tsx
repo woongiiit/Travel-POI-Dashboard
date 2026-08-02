@@ -9,7 +9,7 @@ import {
   Cloud,
   Filter,
   Leaf,
-  Map,
+  Map as MapIcon,
   MapPin,
   PieChart,
   Shuffle,
@@ -33,13 +33,15 @@ import {
   poiEmission,
   poiVisitors,
   type Filters,
+  type Nati,
 } from "@/lib/aggregate";
 import { donutOption, trendOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
 import { fmtEmission, fmtInt, fmtKorUnit, fmtNum } from "@/lib/format";
 import { buildNationalAiInsight, nationalInsights, shortSido } from "@/lib/insights";
+import type { Poi } from "@/lib/types";
 
-const INSIGHT_ICONS = [Map, BarChart3, PieChart, Sprout] as const;
+const INSIGHT_ICONS = [MapIcon, BarChart3, PieChart, Sprout] as const;
 const INSIGHT_TONES = ["teal", "purple", "amber", "green"] as const;
 
 export default function HomePage() {
@@ -76,17 +78,29 @@ export default function HomePage() {
       .sort((a, b) => b.ee - a.ee)
       .slice(0, 10);
 
-    const points: MapPoint[] = filtered.map((p) => ({
-      id: p.id,
-      lon: p.lon,
-      lat: p.lat,
-      name: p.nm,
-      sub: `${p.sido} ${p.sgg} · ${p.lcls}`,
-      emission: poiEmission(p, filters.nati),
-      visitors: poiVisitors(p, filters.nati),
-    }));
+    const points: MapPoint[] = filtered.map((p) => {
+      const visitors = poiVisitors(p, filters.nati);
+      return {
+        id: p.id,
+        lon: p.lon,
+        lat: p.lat,
+        name: p.nm,
+        sub: `${p.sido} ${p.sgg} · ${p.lcls}`,
+        emission: poiEmission(p, filters.nati),
+        visitors,
+        radius: Math.min(16, Math.max(5, Math.sqrt(Math.max(visitors, 1)) * 0.014)),
+      };
+    });
 
-    return { filtered, agg, lclsGroups, sidoGroups, top10, points };
+    // 전국 → 시도 요약 / 시도만 선택 → 시군구 요약 / 시군구 선택 → 개별 POI
+    const overviewPoints: MapPoint[] | null =
+      filters.sido === ALL
+        ? aggregateByRegion(filtered, filters.nati, "sido")
+        : filters.sgg === ALL
+          ? aggregateByRegion(filtered, filters.nati, "sgg")
+          : null;
+
+    return { filtered, agg, lclsGroups, sidoGroups, top10, points, overviewPoints };
   }, [meta, pois, filters]);
 
   const trend = useMemo(() => {
@@ -105,6 +119,21 @@ export default function HomePage() {
   const scopeLabel =
     filters.sido === ALL ? "전국" : filters.sgg === ALL ? filters.sido : `${filters.sido} ${filters.sgg}`;
 
+  /** 시도·시군구 필터에 맞춰 지도 카메라 (카테고리 필터는 카메라에 영향 없음) */
+  const mapBounds = useMemo(() => {
+    if (filters.sido === ALL) return null;
+    const region = pois.filter(
+      (p) =>
+        p.sido === filters.sido &&
+        (filters.sgg === ALL || p.sgg === filters.sgg) &&
+        Number.isFinite(p.lon) &&
+        Number.isFinite(p.lat),
+    );
+    return boundsFromPoints(region);
+  }, [pois, filters.sido, filters.sgg]);
+
+  const mapFitMaxZoom = filters.sgg !== ALL ? 12 : 9;
+
   if (loading) {
     return (
       <>
@@ -122,9 +151,12 @@ export default function HomePage() {
     );
   }
 
-  const { agg, lclsGroups, sidoGroups, top10, points } = view;
+  const { agg, lclsGroups, sidoGroups, top10, points, overviewPoints } = view;
   const totalEmission = agg.totalEmission;
-  const maxE = Math.max(...points.map((p) => p.emission), 1);
+  const maxE = Math.max(
+    1,
+    ...(overviewPoints ?? points).map((p) => p.emission),
+  );
 
   const donut = donutOption(
     lclsGroups.map((g) => ({ name: g.label, value: g.emission, color: lclsColor(g.key) })),
@@ -138,6 +170,15 @@ export default function HomePage() {
     if (!poi) return;
     const params = new URLSearchParams({ poi: id, sido: poi.sido, sgg: poi.sgg });
     router.push(`/region?${params.toString()}`);
+  };
+
+  const handleOverviewSelect = (id: string) => {
+    setFilters((f) => {
+      // 전국 요약 원 클릭 → 해당 시도
+      if (f.sido === ALL) return { ...f, sido: id, sgg: ALL };
+      // 시도 요약(시군구 원) 클릭 → 해당 시군구
+      return { ...f, sgg: id };
+    });
   };
 
   return (
@@ -219,8 +260,29 @@ export default function HomePage() {
         </div>
 
         <div className="grid" style={{ gridTemplateColumns: "1.35fr 1.25fr 0.9fr" }}>
-          <Card title={`${scopeLabel} POI 분포도`} unit="원 크기=방문자, 색상=배출량">
-            <MapView points={points} height={420} maxEmission={maxE} cluster onSelect={handleMapSelect} />
+          <Card
+            title={`${scopeLabel} POI 분포도`}
+            unit={
+              filters.sido === ALL
+                ? "시도 요약 · 클릭 시 해당 시도로 이동"
+                : overviewPoints
+                  ? "시군구 요약 · 클릭 시 해당 시군구로 이동"
+                  : "원 크기=방문자, 색상=배출량"
+            }
+          >
+            <MapView
+              points={points}
+              overviewPoints={overviewPoints}
+              height={420}
+              maxEmission={maxE}
+              bounds={mapBounds}
+              fitMaxZoom={mapFitMaxZoom}
+              fitMinZoom={filters.sgg !== ALL ? 9.5 : 7}
+              center={[127.8, 36.2]}
+              zoom={5.7}
+              onSelect={handleMapSelect}
+              onOverviewSelect={handleOverviewSelect}
+            />
           </Card>
 
           <Card title="탄소배출량 Top 10 POI" foot="※ 선택한 필터 기준으로 집계됩니다.">
@@ -252,7 +314,7 @@ export default function HomePage() {
 
           <Card title={`${scopeLabel} 상황 집계`}>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <StatRow icon={<AppIcon icon={Map} size={16} />} label="활성 시도 수" value={`${agg.nSido}개`} />
+              <StatRow icon={<AppIcon icon={MapIcon} size={16} />} label="활성 시도 수" value={`${agg.nSido}개`} />
               <StatRow icon={<AppIcon icon={Building2} size={16} />} label="활성 시군구 수" value={`${agg.nSgg}개`} />
               <StatRow icon={<AppIcon icon={MapPin} size={16} />} label="활성 POI 수" value={`${fmtInt(agg.count)}개`} />
               <StatRow icon={<AppIcon icon={Users} size={16} />} label="총 방문자 수" value={`${fmtKorUnit(agg.totalVisitors)}명`} />
@@ -282,7 +344,7 @@ export default function HomePage() {
               {insights.map((ins, i) => (
                 <InsightBlock
                   key={i}
-                  icon={<AppIcon icon={INSIGHT_ICONS[i] ?? Map} size={16} />}
+                  icon={<AppIcon icon={INSIGHT_ICONS[i] ?? MapIcon} size={16} />}
                   tone={INSIGHT_TONES[i] ?? "teal"}
                   title={ins.title}
                   text={ins.text}
@@ -301,6 +363,75 @@ export default function HomePage() {
       </div>
     </>
   );
+}
+
+function aggregateByRegion(filtered: Poi[], nati: Nati, level: "sido" | "sgg"): MapPoint[] {
+  type Acc = { lon: number; lat: number; emission: number; visitors: number; count: number; label: string };
+  const buckets = new Map<string, Acc>();
+
+  for (const p of filtered) {
+    if (!Number.isFinite(p.lon) || !Number.isFinite(p.lat)) continue;
+    const key = level === "sido" ? p.sido : p.sgg;
+    const emission = poiEmission(p, nati);
+    const visitors = poiVisitors(p, nati);
+    const cur = buckets.get(key);
+    if (!cur) {
+      buckets.set(key, {
+        lon: p.lon,
+        lat: p.lat,
+        emission,
+        visitors,
+        count: 1,
+        label: level === "sido" ? shortSido(p.sido) : p.sgg,
+      });
+    } else {
+      const n = cur.count + 1;
+      cur.lon = (cur.lon * cur.count + p.lon) / n;
+      cur.lat = (cur.lat * cur.count + p.lat) / n;
+      cur.emission += emission;
+      cur.visitors += visitors;
+      cur.count = n;
+    }
+  }
+
+  return [...buckets.entries()].map(([id, a]) => ({
+    id,
+    lon: a.lon,
+    lat: a.lat,
+    name: a.label,
+    sub: level === "sido" ? `${id} · POI ${a.count}곳` : `POI ${a.count}곳`,
+    emission: a.emission,
+    visitors: a.visitors,
+    count: a.count,
+    // 시군구 단위는 원이 조금 더 작아도 구분됨
+    radius:
+      level === "sido"
+        ? Math.min(30, Math.max(12, 10 + Math.sqrt(a.count) * 1.05))
+        : Math.min(24, Math.max(10, 9 + Math.sqrt(a.count) * 1.15)),
+  }));
+}
+
+function boundsFromPoints(
+  points: { lon: number; lat: number }[],
+): [[number, number], [number, number]] | null {
+  if (!points.length) return null;
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+  for (const p of points) {
+    minLon = Math.min(minLon, p.lon);
+    minLat = Math.min(minLat, p.lat);
+    maxLon = Math.max(maxLon, p.lon);
+    maxLat = Math.max(maxLat, p.lat);
+  }
+  // 포인트 1개·동일 좌표일 때 최소 범위 확보
+  const padLon = Math.max((maxLon - minLon) * 0.12, 0.04);
+  const padLat = Math.max((maxLat - minLat) * 0.12, 0.04);
+  return [
+    [minLon - padLon, minLat - padLat],
+    [maxLon + padLon, maxLat + padLat],
+  ];
 }
 
 function formatAiScope(f: Filters): string {
