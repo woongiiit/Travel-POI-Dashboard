@@ -96,12 +96,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-
-      <div className="sidebar__foot">
-        한국관광공사 · 환경부 · 기상청
-        <br />
-        KT 통신데이터 기반 추정치
-      </div>
     </aside>
   );
 }
