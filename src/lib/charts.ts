@@ -10,6 +10,8 @@ const ECO_GREEN = "#2D9B6A";
 
 const baseGrid = { left: 8, right: 16, top: 28, bottom: 8, containLabel: true };
 
+const trendGrid = { left: 8, right: 16, top: 20, bottom: 28, containLabel: true };
+
 /** 월별 추이 (방문자 막대 + 탄소배출 라인, 이중축) */
 export function trendOption(
   ymList: string[],
@@ -18,7 +20,7 @@ export function trendOption(
 ): EChartsOption {
   return {
     textStyle: { fontFamily: FONT },
-    grid: baseGrid,
+    grid: trendGrid,
     tooltip: {
       trigger: "axis",
       formatter: (params: unknown) => {
@@ -32,7 +34,15 @@ export function trendOption(
         return `${head}<br/>${lines.join("<br/>")}`;
       },
     },
-    legend: { right: 0, top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11, color: "#64748b" } },
+    legend: {
+      bottom: 0,
+      left: "center",
+      orient: "horizontal",
+      itemGap: 20,
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { fontSize: 11, color: "#64748b" },
+    },
     xAxis: {
       type: "category",
       data: ymList.map(fmtYm),
