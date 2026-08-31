@@ -5,13 +5,14 @@ import type { Meta } from "@/lib/types";
 import { ALL, type Filters } from "@/lib/aggregate";
 import { Building2, MapPin, Puzzle, Tags, Users } from "lucide-react";
 import { AppIcon } from "./icons";
+import { PeriodRangeField } from "./PeriodRangeField";
 import { Select } from "./ui";
 
 interface Props {
   meta: Meta;
   filters: Filters;
   onChange: (next: Filters) => void;
-  show?: Array<"sido" | "sgg" | "lcls" | "mcls" | "nati">;
+  show?: Array<"sido" | "sgg" | "lcls" | "mcls" | "nati" | "period">;
   children?: ReactNode;
 }
 
@@ -30,7 +31,6 @@ export function FilterBar({
     filters.lcls === ALL
       ? [ALL]
       : [ALL, ...(meta.filters.mclsByLcls[filters.lcls] ?? [])];
-
   return (
     <div className="filterbar">
       {show.includes("sido") && (
@@ -69,6 +69,14 @@ export function FilterBar({
           onChange={(v) => onChange({ ...filters, mcls: v })}
         />
       )}
+      {show.includes("period") && (
+        <PeriodRangeField
+          meta={meta}
+          ymFrom={filters.ymFrom}
+          ymTo={filters.ymTo}
+          onChange={(ymFrom, ymTo) => onChange({ ...filters, ymFrom, ymTo })}
+        />
+      )}
       {show.includes("nati") && (
         <Select
           label="방문객 유형"
@@ -79,9 +87,6 @@ export function FilterBar({
         />
       )}
       {children}
-      <div style={{ marginLeft: "auto", alignSelf: "flex-end", fontSize: 11, color: "var(--text-faint)" }}>
-        기간 {meta.ymMin.slice(0, 4)}.{meta.ymMin.slice(4)} ~ {meta.ymMax.slice(0, 4)}.{meta.ymMax.slice(4)}
-      </div>
     </div>
   );
 }

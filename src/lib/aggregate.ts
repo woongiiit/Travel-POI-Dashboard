@@ -8,6 +8,9 @@ export interface Filters {
   lcls: string;
   mcls: string;
   nati: Nati;
+  /** YYYYMM — meta.ymList 범위 내 시작·종료월 */
+  ymFrom: string;
+  ymTo: string;
 }
 
 export const ALL = "전체";
@@ -18,7 +21,73 @@ export const defaultFilters: Filters = {
   lcls: ALL,
   mcls: ALL,
   nati: ALL,
+  ymFrom: "",
+  ymTo: "",
 };
+
+/** meta 로드 후 기본 기간(전체) 설정 */
+export function defaultFiltersForMeta(meta: { ymMin: string; ymMax: string }): Filters {
+  return { ...defaultFilters, ymFrom: meta.ymMin, ymTo: meta.ymMax };
+}
+
+/** ymFrom~ymTo → ymList 인덱스 구간 (inclusive) */
+export function resolveYmRange(
+  ymList: string[],
+  ymFrom: string,
+  ymTo: string,
+): { from: number; to: number; nMonths: number } {
+  if (!ymFrom || !ymTo) {
+    return { from: 0, to: ymList.length - 1, nMonths: ymList.length };
+  }
+  const from = ymList.indexOf(ymFrom);
+  const to = ymList.indexOf(ymTo);
+  if (from < 0 || to < 0) {
+    return { from: 0, to: ymList.length - 1, nMonths: ymList.length };
+  }
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  return { from: lo, to: hi, nMonths: hi - lo + 1 };
+}
+
+/** 전체 기간 선택 여부 (pois.json 누적값 사용 가능) */
+export function isFullYmRange(ymList: string[], ymFrom: string, ymTo: string): boolean {
+  if (!ymList.length || !ymFrom || !ymTo) return true;
+  return ymFrom === ymList[0] && ymTo === ymList[ymList.length - 1];
+}
+
+/** 선택 기간 내 POI 방문자·배출 (monthly 슬라이스) */
+export function poiPeriodMetrics(
+  p: Poi,
+  monthly: Record<string, number[]>,
+  from: number,
+  to: number,
+  nati: Nati,
+): { visitors: number; emission: number } {
+  const arr = monthly[p.id];
+  if (!arr) return { visitors: 0, emission: 0 };
+  let raw = 0;
+  for (let i = from; i <= to; i++) raw += arr[i] ?? 0;
+  const ratio = p.v ? poiVisitors(p, nati) / p.v : 1;
+  const visitors = raw * ratio;
+  const emission = (visitors * p.pc) / 1000;
+  return { visitors, emission };
+}
+
+/** 선택 기간이 전체가 아니면 monthly 기반, 전체면 pois.json 누적값 */
+export function poiScopedMetrics(
+  p: Poi,
+  nati: Nati,
+  ymFrom: string,
+  ymTo: string,
+  ymList: string[],
+  monthly: Record<string, number[]> | null,
+): { visitors: number; emission: number } {
+  if (isFullYmRange(ymList, ymFrom, ymTo) || !monthly) {
+    return { visitors: poiVisitors(p, nati), emission: poiEmission(p, nati) };
+  }
+  const { from, to } = resolveYmRange(ymList, ymFrom, ymTo);
+  return poiPeriodMetrics(p, monthly, from, to, nati);
+}
 
 /** nati 필터를 반영한 POI별 방문자수 */
 export function poiVisitors(p: Poi, nati: Nati): number {
@@ -54,7 +123,13 @@ export interface Aggregates {
   nSgg: number;
 }
 
-export function aggregate(pois: Poi[], nati: Nati, nMonths: number, lowTh = 1.0): Aggregates {
+export function aggregate(
+  pois: Poi[],
+  nati: Nati,
+  nMonths: number,
+  lowTh = 1.0,
+  metricsFn?: (p: Poi) => { visitors: number; emission: number },
+): Aggregates {
   let totalVisitors = 0;
   let totalEmission = 0;
   let lowCarbonCount = 0;
@@ -63,8 +138,9 @@ export function aggregate(pois: Poi[], nati: Nati, nMonths: number, lowTh = 1.0)
   const emissions: number[] = [];
 
   for (const p of pois) {
-    const v = poiVisitors(p, nati);
-    const e = (v * p.pc) / 1000;
+    const { visitors: v, emission: e } = metricsFn
+      ? metricsFn(p)
+      : { visitors: poiVisitors(p, nati), emission: poiEmission(p, nati) };
     totalVisitors += v;
     totalEmission += e;
     emissions.push(e);
@@ -103,6 +179,7 @@ export function groupBy(
   nati: Nati,
   keyFn: (p: Poi) => string,
   labelFn?: (p: Poi) => string,
+  metricsFn?: (p: Poi) => { visitors: number; emission: number },
 ): Group[] {
   const map = new Map<string, Group>();
   for (const p of pois) {
@@ -112,8 +189,11 @@ export function groupBy(
       g = { key, label: labelFn ? labelFn(p) : key, visitors: 0, emission: 0, nPoi: 0 };
       map.set(key, g);
     }
-    g.visitors += poiVisitors(p, nati);
-    g.emission += poiEmission(p, nati);
+    const m = metricsFn
+      ? metricsFn(p)
+      : { visitors: poiVisitors(p, nati), emission: poiEmission(p, nati) };
+    g.visitors += m.visitors;
+    g.emission += m.emission;
     g.nPoi += 1;
   }
   return [...map.values()].sort((a, b) => b.emission - a.emission);
@@ -125,16 +205,19 @@ export function monthlySeries(
   monthly: Record<string, number[]>,
   nMonths: number,
   nati: Nati,
+  fromIdx = 0,
+  toIdx?: number,
 ): { visitors: number[]; emission: number[] } {
-  const visitors = new Array(nMonths).fill(0);
-  const emission = new Array(nMonths).fill(0);
+  const end = toIdx ?? nMonths - 1;
+  const len = end - fromIdx + 1;
+  const visitors = new Array(len).fill(0);
+  const emission = new Array(len).fill(0);
   for (const p of pois) {
     const arr = monthly[p.id];
     if (!arr) continue;
-    // 현지인/외지인 비율로 월별 방문자 근사 분배
     const ratio = p.v ? poiVisitors(p, nati) / p.v : 1;
-    for (let i = 0; i < nMonths; i++) {
-      const v = arr[i] * ratio;
+    for (let i = 0; i < len; i++) {
+      const v = (arr[fromIdx + i] ?? 0) * ratio;
       visitors[i] += v;
       emission[i] += (v * p.pc) / 1000;
     }

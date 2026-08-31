@@ -92,13 +92,16 @@ export function Select({
   value,
   options,
   onChange,
+  formatOption,
 }: {
   label: string;
   icon?: ReactNode;
   value: string;
   options: string[];
   onChange: (v: string) => void;
+  formatOption?: (value: string) => string;
 }) {
+  const fmt = formatOption ?? ((v: string) => v);
   return (
     <div className="field">
       <label>
@@ -108,7 +111,7 @@ export function Select({
       <select value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => (
           <option key={o} value={o}>
-            {o}
+            {fmt(o)}
           </option>
         ))}
       </select>

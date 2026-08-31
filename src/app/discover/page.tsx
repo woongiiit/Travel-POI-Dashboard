@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bike,
@@ -18,10 +18,11 @@ import {
 } from "lucide-react";
 import { useDataset } from "@/components/DataProvider";
 import { AppIcon } from "@/components/icons";
+import { PeriodRangeField } from "@/components/PeriodRangeField";
 import { PageHeader, Card, Kpi, LoadingState, ErrorState, Select, InsightBlock } from "@/components/ui";
 import { EChart } from "@/components/charts/EChart";
 import { MapView, type MapPoint } from "@/components/MapView";
-import { ALL } from "@/lib/aggregate";
+import { ALL, isFullYmRange, poiScopedMetrics, resolveYmRange } from "@/lib/aggregate";
 import {
   QUADRANT_META,
   quadrantOf,
@@ -75,36 +76,53 @@ function sampleN<T>(arr: T[], n: number, rand: () => number): T[] {
 }
 
 export default function DiscoverPage() {
-  const { meta, pois, loading, error } = useDataset();
+  const { meta, pois, loading, error, loadMonthly } = useDataset();
   const router = useRouter();
   const [sido, setSido] = useState<string>(ALL);
   const [lcls, setLcls] = useState<string>(ALL);
   const [mcls, setMcls] = useState<string>(ALL);
+  const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
+  const [ymFrom, setYmFrom] = useState("");
+  const [ymTo, setYmTo] = useState("");
   // 세션(마운트)마다 다른 표본이 뽑히도록 무작위 시드로 시작
   const [sampleSeed, setSampleSeed] = useState(() => Math.floor(Math.random() * 2 ** 31));
   const reshuffle = useCallback(() => setSampleSeed(Math.floor(Math.random() * 2 ** 31)), []);
 
+  useEffect(() => { loadMonthly().then(setMonthly); }, [loadMonthly]);
+
+  useEffect(() => {
+    if (!meta || (ymFrom && ymTo)) return;
+    setYmFrom(meta.ymMin);
+    setYmTo(meta.ymMax);
+  }, [meta, ymFrom, ymTo]);
+
+  const ymFromR = ymFrom || meta?.ymMin || "";
+  const ymToR = ymTo || meta?.ymMax || "";
+  const periodReady = !meta || isFullYmRange(meta.ymList, ymFromR, ymToR) || !!monthly;
+
   const data = useMemo(() => {
-    if (!meta) return null;
+    if (!meta || !periodReady) return null;
+    const { nMonths: periodMonths } = resolveYmRange(meta.ymList, ymFromR, ymToR);
+    const metrics = (p: Poi) => poiScopedMetrics(p, ALL, ymFromR, ymToR, meta.ymList, monthly);
     const f = pois.filter(
       (p) =>
         (sido === ALL || p.sido === sido) &&
         (lcls === ALL || p.lcls === lcls) &&
         (mcls === ALL || p.mcls === mcls),
     );
-    const mvs = f.map((p) => p.v / meta.nMonths);
+    const mvs = f.map((p) => metrics(p).visitors / periodMonths);
     const pcs = f.map((p) => p.pc);
     const medV = median(mvs);
     const medPc = median(pcs);
     const pcQ25 = quantile(pcs, 0.25);
 
-    // 점수: 인기(로그) × 탄소효율(낮은 1인당 배출)
     const scored: Scored[] = f.map((p) => {
-      const mv = p.v / meta.nMonths;
+      const m = metrics(p);
+      const mv = m.visitors / periodMonths;
       const eff = medPc / Math.max(p.pc, 0.05);
       const pop = Math.log10(Math.max(mv, 1)) / Math.log10(Math.max(medV * 4, 10));
       const score = eff * 0.55 + pop * 0.45;
-      return { ...p, mv, score, grade: "C" };
+      return { ...p, v: m.visitors, e: m.emission, mv, score, grade: "C" as const };
     });
     scored.sort((a, b) => b.score - a.score);
 
@@ -131,7 +149,7 @@ export default function DiscoverPage() {
       f, scored, medV, medPc, eligible, lowPopular, candidates, hidden, quadrants,
       routes: routeSgg.size,
     };
-  }, [meta, pois, sido, lcls, mcls]);
+  }, [meta, pois, sido, lcls, mcls, ymFromR, ymToR, monthly, periodReady]);
 
   const scatterConfig = useMemo(() => {
     if (!data) return null;
@@ -159,7 +177,9 @@ export default function DiscoverPage() {
   }, [data, sampleSeed]);
 
   if (loading) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><LoadingState /></>);
-  if (error || !meta || !data) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><ErrorState message={error ?? "오류"} /></>);
+  if (error || !meta) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><ErrorState message={error ?? "오류"} /></>);
+  if (!periodReady) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><LoadingState label="월별 데이터 로딩 중…" /></>);
+  if (!data) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><LoadingState /></>);
 
   const mclsOptions = lcls === ALL ? [ALL] : [ALL, ...(meta.filters.mclsByLcls[lcls] ?? [])];
 
@@ -186,6 +206,12 @@ export default function DiscoverPage() {
         <Select label="지역" icon={<AppIcon icon={MapPin} size={14} />} value={sido} options={[ALL, ...meta.filters.sido]} onChange={setSido} />
         <Select label="대분류" icon={<AppIcon icon={Tags} size={14} />} value={lcls} options={[ALL, ...meta.filters.lcls]} onChange={(v) => { setLcls(v); setMcls(ALL); }} />
         <Select label="중분류" icon={<AppIcon icon={TrendingUp} size={14} />} value={mcls} options={mclsOptions} onChange={setMcls} />
+        <PeriodRangeField
+          meta={meta}
+          ymFrom={ymFrom}
+          ymTo={ymTo}
+          onChange={(f, t) => { setYmFrom(f); setYmTo(t); }}
+        />
       </div>
 
       <div className="content">

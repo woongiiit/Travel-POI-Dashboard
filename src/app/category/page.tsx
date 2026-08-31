@@ -14,14 +14,17 @@ import {
 } from "lucide-react";
 import { useDataset } from "@/components/DataProvider";
 import { AppIcon } from "@/components/icons";
+import { PeriodRangeField } from "@/components/PeriodRangeField";
 import { PageHeader, Card, Kpi, LoadingState, ErrorState, Select, InsightBlock } from "@/components/ui";
 import { EChart } from "@/components/charts/EChart";
 import {
   ALL,
   applyFilters,
   groupBy,
+  isFullYmRange,
   monthlySeries,
-  poiEmission,
+  poiScopedMetrics,
+  resolveYmRange,
   type Filters,
   type Nati,
 } from "@/lib/aggregate";
@@ -36,43 +39,59 @@ export default function CategoryPage() {
   const [mcls, setMcls] = useState<string>(ALL);
   const nati: Nati = ALL;
   const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
+  const [ymFrom, setYmFrom] = useState("");
+  const [ymTo, setYmTo] = useState("");
 
   useEffect(() => { loadMonthly().then(setMonthly); }, [loadMonthly]);
 
+  useEffect(() => {
+    if (!meta || (ymFrom && ymTo)) return;
+    setYmFrom(meta.ymMin);
+    setYmTo(meta.ymMax);
+  }, [meta, ymFrom, ymTo]);
+
+  const ymFromR = ymFrom || meta?.ymMin || "";
+  const ymToR = ymTo || meta?.ymMax || "";
+  const periodReady = !meta || isFullYmRange(meta.ymList, ymFromR, ymToR) || !!monthly;
+
   const view = useMemo(() => {
-    if (!meta) return null;
+    if (!meta || !periodReady) return null;
+    const metrics = (p: Parameters<typeof poiScopedMetrics>[0]) =>
+      poiScopedMetrics(p, nati, ymFromR, ymToR, meta.ymList, monthly);
     const regionPois = sido === ALL ? pois : pois.filter((p) => p.sido === sido);
-    const selPois = applyFilters(regionPois, { sido, sgg: ALL, lcls, mcls, nati } as Filters);
-    const totalRegionE = regionPois.reduce((s, p) => s + poiEmission(p, nati), 0);
-    const selE = selPois.reduce((s, p) => s + poiEmission(p, nati), 0);
-    const selV = selPois.reduce((s, p) => s + p.v, 0);
-    const lclsGroups = groupBy(regionPois, nati, (p) => p.lcls);
-    const mclsGroups = groupBy(regionPois, nati, (p) => p.mcls, (p) => p.mcls);
+    const selPois = applyFilters(regionPois, { sido, sgg: ALL, lcls, mcls, nati, ymFrom: ymFromR, ymTo: ymToR } as Filters);
+    const totalRegionE = regionPois.reduce((s, p) => s + metrics(p).emission, 0);
+    const selE = selPois.reduce((s, p) => s + metrics(p).emission, 0);
+    const selV = selPois.reduce((s, p) => s + metrics(p).visitors, 0);
+    const lclsGroups = groupBy(regionPois, nati, (p) => p.lcls, undefined, metrics);
+    const mclsGroups = groupBy(regionPois, nati, (p) => p.mcls, (p) => p.mcls, metrics);
     return { regionPois, selPois, totalRegionE, selE, selV, lclsGroups, mclsGroups };
-  }, [meta, pois, sido, lcls, mcls, nati]);
+  }, [meta, pois, sido, lcls, mcls, nati, ymFromR, ymToR, monthly, periodReady]);
 
   const trend = useMemo(() => {
     if (!meta || !monthly || !view) return null;
-    const { visitors, emission } = monthlySeries(view.selPois, monthly, meta.nMonths, nati);
-    // 연-월 -> 월(1~12) 계절 패턴
+    const { from, to } = resolveYmRange(meta.ymList, ymFromR, ymToR);
+    const { emission } = monthlySeries(view.selPois, monthly, meta.nMonths, nati, from, to);
+    const ymSlice = meta.ymList.slice(from, to + 1);
     const byMonth = new Array(12).fill(0);
     const cnt = new Array(12).fill(0);
-    meta.ymList.forEach((ym, i) => {
+    ymSlice.forEach((ym, i) => {
       const m = Number(ym.slice(4, 6)) - 1;
       byMonth[m] += emission[i];
       cnt[m] += 1;
     });
     const seasonal = byMonth.map((v, i) => (cnt[i] ? v / cnt[i] : 0));
-    // YoY: 최근 12개월 vs 직전 12개월
     const n = emission.length;
-    const recent = emission.slice(n - 12).reduce((a, b) => a + b, 0);
-    const prev = emission.slice(n - 24, n - 12).reduce((a, b) => a + b, 0);
+    const recent = n >= 12 ? emission.slice(n - 12).reduce((a, b) => a + b, 0) : emission.reduce((a, b) => a + b, 0);
+    const prev = n >= 24 ? emission.slice(n - 24, n - 12).reduce((a, b) => a + b, 0) : 0;
     const yoy = prev ? ((recent - prev) / prev) * 100 : 0;
-    return { seasonal, yoy, visitors };
-  }, [meta, monthly, view, nati]);
+    return { seasonal, yoy };
+  }, [meta, monthly, view, nati, ymFromR, ymToR]);
 
   if (loading) return (<><PageHeader title="카테고리 분석" /><LoadingState /></>);
-  if (error || !meta || !view) return (<><PageHeader title="카테고리 분석" /><ErrorState message={error ?? "오류"} /></>);
+  if (error || !meta) return (<><PageHeader title="카테고리 분석" /><ErrorState message={error ?? "오류"} /></>);
+  if (!periodReady) return (<><PageHeader title="카테고리 분석" /><LoadingState label="월별 데이터 로딩 중…" /></>);
+  if (!view) return (<><PageHeader title="카테고리 분석" /><LoadingState /></>);
 
   const mclsOptions = lcls === ALL ? [ALL] : [ALL, ...(meta.filters.mclsByLcls[lcls] ?? [])];
   const sharePct = view.totalRegionE ? (view.selE / view.totalRegionE) * 100 : 0;
@@ -101,6 +120,12 @@ export default function CategoryPage() {
         <Select label="지역" icon={<AppIcon icon={MapPin} size={14} />} value={sido} options={[ALL, ...meta.filters.sido]} onChange={setSido} />
         <Select label="대분류" icon={<AppIcon icon={Tags} size={14} />} value={lcls} options={[ALL, ...meta.filters.lcls]} onChange={(v) => { setLcls(v); setMcls(ALL); }} />
         <Select label="중분류" icon={<AppIcon icon={PieChart} size={14} />} value={mcls} options={mclsOptions} onChange={setMcls} />
+        <PeriodRangeField
+          meta={meta}
+          ymFrom={ymFrom}
+          ymTo={ymTo}
+          onChange={(f, t) => { setYmFrom(f); setYmTo(t); }}
+        />
         <div style={{ marginLeft: "auto", alignSelf: "flex-end", fontSize: 11, color: "var(--text-faint)" }}>
           {scope} · {catLabel}
         </div>

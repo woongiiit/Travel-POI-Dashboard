@@ -18,13 +18,15 @@ import {
 } from "lucide-react";
 import { useDataset } from "@/components/DataProvider";
 import { AppIcon } from "@/components/icons";
+import { PeriodRangeField } from "@/components/PeriodRangeField";
 import { PageHeader, Card, Kpi, LoadingState, ErrorState, Select, InsightBlock } from "@/components/ui";
 import { EChart } from "@/components/charts/EChart";
 import { PoiPhoto } from "@/components/PoiPhoto";
-import { ALL, groupBy } from "@/lib/aggregate";
+import { ALL, groupBy, isFullYmRange, poiScopedMetrics, resolveYmRange } from "@/lib/aggregate";
 import { donutOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
 import { fmtInt, fmtNum } from "@/lib/format";
+import { buildRegionGuideAdvice } from "@/lib/guide-advice";
 
 const LEVELS = ["매우높음", "높음", "보통", "낮음", "매우낮음"];
 
@@ -46,34 +48,53 @@ const TRAVELER_HINT: Record<string, string> = {
 };
 
 export default function GuidePage() {
-  const { meta, pois, loading, error } = useDataset();
+  const { meta, pois, loading, error, loadMonthly } = useDataset();
   const [sido, setSido] = useState("");
   const [sgg, setSgg] = useState(ALL);
   const [travelerType, setTravelerType] = useState("가족 여행");
+  const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
+  const [ymFrom, setYmFrom] = useState("");
+  const [ymTo, setYmTo] = useState("");
+
+  useEffect(() => { loadMonthly().then(setMonthly); }, [loadMonthly]);
 
   useEffect(() => {
     if (meta && !sido) setSido(meta.filters.sido[0] ?? "");
   }, [meta, sido]);
 
+  useEffect(() => {
+    if (!meta || (ymFrom && ymTo)) return;
+    setYmFrom(meta.ymMin);
+    setYmTo(meta.ymMax);
+  }, [meta, ymFrom, ymTo]);
+
+  const ymFromR = ymFrom || meta?.ymMin || "";
+  const ymToR = ymTo || meta?.ymMax || "";
+  const periodReady = !meta || isFullYmRange(meta.ymList, ymFromR, ymToR) || !!monthly;
+
   const nationalPc = meta?.kpis.perCapitaKg ?? 1;
 
   const data = useMemo(() => {
-    if (!meta || !sido) return null;
+    if (!meta || !sido || !periodReady) return null;
+    const metrics = (p: Parameters<typeof poiScopedMetrics>[0]) =>
+      poiScopedMetrics(p, ALL, ymFromR, ymToR, meta.ymList, monthly);
+    const { nMonths: periodMonths } = resolveYmRange(meta.ymList, ymFromR, ymToR);
     const regionPois = pois.filter((p) => p.sido === sido && (sgg === ALL || p.sgg === sgg));
     if (!regionPois.length) return { regionPois, empty: true } as const;
-    const totV = regionPois.reduce((s, p) => s + p.v, 0);
-    const totE = regionPois.reduce((s, p) => s + p.e, 0);
+    const totV = regionPois.reduce((s, p) => s + metrics(p).visitors, 0);
+    const totE = regionPois.reduce((s, p) => s + metrics(p).emission, 0);
     const regionPc = totV ? (totE * 1000) / totV : 0;
     const ratio = nationalPc ? regionPc / nationalPc : 1;
     const levelIdx = ratio >= 1.3 ? 0 : ratio >= 1.1 ? 1 : ratio >= 0.9 ? 2 : ratio >= 0.7 ? 3 : 4;
 
-    const lclsGroups = groupBy(regionPois, ALL, (p) => p.lcls);
+    const lclsGroups = groupBy(regionPois, ALL, (p) => p.lcls, undefined, metrics);
     const medPc = regionPois.map((p) => p.pc).sort((a, b) => a - b)[Math.floor(regionPois.length / 2)] ?? 1;
 
     const weights = TRAVELER_LCLS_WEIGHT[travelerType] ?? {};
     const scored = regionPois
       .map((p) => {
-        const base = (medPc / Math.max(p.pc, 0.05)) * Math.log10(Math.max(p.v / meta.nMonths, 1));
+        const m = metrics(p);
+        const base = (medPc / Math.max(p.pc, 0.05)) * Math.log10(Math.max(m.visitors / periodMonths, 1));
         const w = weights[p.lcls] ?? 1;
         return { p, score: base * w };
       })
@@ -86,10 +107,11 @@ export default function GuidePage() {
     const rep = course[0] ?? scored[0];
 
     return { regionPois, totV, totE, regionPc, ratio, levelIdx, lclsGroups, course, similar, rep, empty: false };
-  }, [meta, pois, sido, sgg, nationalPc, travelerType]);
+  }, [meta, pois, sido, sgg, nationalPc, travelerType, ymFromR, ymToR, monthly, periodReady]);
 
   if (loading) return (<><PageHeader title="AI 여행자 가이드" /><LoadingState /></>);
   if (error || !meta) return (<><PageHeader title="AI 여행자 가이드" /><ErrorState message={error ?? "오류"} /></>);
+  if (!periodReady) return (<><PageHeader title="AI 여행자 가이드" /><LoadingState label="월별 데이터 로딩 중…" /></>);
 
   const sggOptions = sido ? [ALL, ...(meta.filters.sggBySido[sido] ?? [])] : [ALL];
   const scope = sgg === ALL ? sido : `${sido} ${sgg}`;
@@ -99,7 +121,9 @@ export default function GuidePage() {
       <>
         <PageHeader title="AI 여행자 가이드" subtitle="선택 지역·POI 기반 맞춤형 탄소중립 여행 제안" />
         <Filters meta={meta} sido={sido} sgg={sgg} sggOptions={sggOptions} travelerType={travelerType}
-          onSido={(v) => { setSido(v); setSgg(ALL); }} onSgg={setSgg} onType={setTravelerType} />
+          ymFrom={ymFrom} ymTo={ymTo}
+          onSido={(v) => { setSido(v); setSgg(ALL); }} onSgg={setSgg} onType={setTravelerType}
+          onPeriod={(f, t) => { setYmFrom(f); setYmTo(t); }} />
         <div className="content"><LoadingState label="해당 지역 데이터가 없습니다." /></div>
       </>
     );
@@ -110,12 +134,26 @@ export default function GuidePage() {
     `${fmtNum(data.regionPc, 2)}\nkgCO₂e/인`,
   );
 
+  const regionAdvice = buildRegionGuideAdvice({
+    scope,
+    sido,
+    levelIdx: data.levelIdx,
+    ratio: data.ratio,
+    topLcls: data.lclsGroups[0],
+    totalEmission: data.totE,
+    regionPois: data.regionPois,
+    repPoi: data.rep,
+    travelerType,
+  });
+
   return (
     <>
       <PageHeader title="AI 여행자 가이드" subtitle="선택 지역 기반 맞춤형 탄소중립 여행 제안"
         right={<span className="pill pill--teal"><AppIcon icon={Sparkles} size={14} /> AI 추천</span>} />
       <Filters meta={meta} sido={sido} sgg={sgg} sggOptions={sggOptions} travelerType={travelerType}
-        onSido={(v) => { setSido(v); setSgg(ALL); }} onSgg={setSgg} onType={setTravelerType} />
+        ymFrom={ymFrom} ymTo={ymTo}
+        onSido={(v) => { setSido(v); setSgg(ALL); }} onSgg={setSgg} onType={setTravelerType}
+        onPeriod={(f, t) => { setYmFrom(f); setYmTo(t); }} />
 
       <div className="content">
         <div className="traveler-hint">
@@ -228,11 +266,14 @@ export default function GuidePage() {
 }
 
 function Filters({
-  meta, sido, sgg, sggOptions, travelerType, onSido, onSgg, onType,
+  meta, sido, sgg, sggOptions, travelerType, ymFrom, ymTo,
+  onSido, onSgg, onType, onPeriod,
 }: {
   meta: NonNullable<ReturnType<typeof useDataset>["meta"]>;
   sido: string; sgg: string; sggOptions: string[]; travelerType: string;
+  ymFrom: string; ymTo: string;
   onSido: (v: string) => void; onSgg: (v: string) => void; onType: (v: string) => void;
+  onPeriod: (ymFrom: string, ymTo: string) => void;
 }) {
   return (
     <div className="filterbar">
@@ -240,6 +281,7 @@ function Filters({
       <Select label="시군구" icon={<AppIcon icon={MapPin} size={14} />} value={sgg} options={sggOptions} onChange={onSgg} />
       <Select label="여행자 유형" icon={<AppIcon icon={Users} size={14} />} value={travelerType}
         options={["가족 여행", "커플 여행", "나홀로 여행", "친구 여행", "시니어 여행"]} onChange={onType} />
+      <PeriodRangeField meta={meta} ymFrom={ymFrom} ymTo={ymTo} onChange={onPeriod} />
     </div>
   );
 }

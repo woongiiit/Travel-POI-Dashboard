@@ -28,16 +28,18 @@ import {
   aggregate,
   applyFilters,
   defaultFilters,
+  defaultFiltersForMeta,
   groupBy,
+  isFullYmRange,
   monthlySeries,
-  poiEmission,
-  poiVisitors,
+  poiScopedMetrics,
+  resolveYmRange,
   type Filters,
   type Nati,
 } from "@/lib/aggregate";
 import { donutOption, trendOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
-import { fmtEmission, fmtInt, fmtKorUnit, fmtNum } from "@/lib/format";
+import { fmtEmission, fmtInt, fmtKorUnit, fmtNum, fmtYmFull } from "@/lib/format";
 import { buildNationalAiInsight, nationalInsights, shortSido } from "@/lib/insights";
 import type { Poi } from "@/lib/types";
 
@@ -62,53 +64,80 @@ export default function HomePage() {
     loadMonthly().then(setMonthly);
   }, [loadMonthly]);
 
+  useEffect(() => {
+    if (!meta) return;
+    setFilters((f) => (f.ymFrom && f.ymTo ? f : defaultFiltersForMeta(meta)));
+    setAiFilters((f) => (f.ymFrom && f.ymTo ? f : defaultFiltersForMeta(meta)));
+  }, [meta]);
+
   const view = useMemo(() => {
     if (!meta) return null;
     const filtered = applyFilters(pois, filters);
-    const agg = aggregate(filtered, filters.nati, meta.nMonths);
-    const lclsGroups = groupBy(filtered, filters.nati, (p) => p.lcls);
-    const sidoGroups = groupBy(filtered, filters.nati, (p) => p.sido);
+    const ymFrom = filters.ymFrom || meta.ymMin;
+    const ymTo = filters.ymTo || meta.ymMax;
+    const needsMonthly = !isFullYmRange(meta.ymList, ymFrom, ymTo);
+    if (needsMonthly && !monthly) return null;
+
+    const metrics = (p: Poi) =>
+      poiScopedMetrics(p, filters.nati, ymFrom, ymTo, meta.ymList, monthly);
+    const { nMonths } = resolveYmRange(meta.ymList, ymFrom, ymTo);
+
+    const agg = aggregate(filtered, filters.nati, nMonths, 1.0, metrics);
+    const lclsGroups = groupBy(filtered, filters.nati, (p) => p.lcls, undefined, metrics);
+    const sidoGroups = groupBy(filtered, filters.nati, (p) => p.sido, undefined, metrics);
 
     const top10 = [...filtered]
-      .map((p) => ({
-        ...p,
-        ev: poiVisitors(p, filters.nati),
-        ee: poiEmission(p, filters.nati),
-      }))
+      .map((p) => {
+        const m = metrics(p);
+        return { ...p, ev: m.visitors, ee: m.emission };
+      })
       .sort((a, b) => b.ee - a.ee)
       .slice(0, 10);
 
     const points: MapPoint[] = filtered.map((p) => {
-      const visitors = poiVisitors(p, filters.nati);
+      const m = metrics(p);
       return {
         id: p.id,
         lon: p.lon,
         lat: p.lat,
         name: p.nm,
         sub: `${p.sido} ${p.sgg} · ${p.lcls}`,
-        emission: poiEmission(p, filters.nati),
-        visitors,
-        radius: Math.min(16, Math.max(5, Math.sqrt(Math.max(visitors, 1)) * 0.014)),
+        emission: m.emission,
+        visitors: m.visitors,
+        radius: Math.min(16, Math.max(5, Math.sqrt(Math.max(m.visitors, 1)) * 0.014)),
       };
     });
 
-    // 전국 → 시도 요약 / 시도만 선택 → 시군구 요약 / 시군구 선택 → 개별 POI
     const overviewPoints: MapPoint[] | null =
       filters.sido === ALL
-        ? aggregateByRegion(filtered, filters.nati, "sido")
+        ? aggregateByRegion(filtered, filters.nati, ymFrom, ymTo, meta.ymList, monthly, "sido")
         : filters.sgg === ALL
-          ? aggregateByRegion(filtered, filters.nati, "sgg")
+          ? aggregateByRegion(filtered, filters.nati, ymFrom, ymTo, meta.ymList, monthly, "sgg")
           : null;
 
     return { filtered, agg, lclsGroups, sidoGroups, top10, points, overviewPoints };
-  }, [meta, pois, filters]);
+  }, [meta, pois, filters, monthly]);
 
   const trend = useMemo(() => {
     if (!meta || !monthly || !view) return null;
-    return monthlySeries(view.filtered, monthly, meta.nMonths, filters.nati);
-  }, [meta, monthly, view, filters.nati]);
+    const ymFrom = filters.ymFrom || meta.ymMin;
+    const ymTo = filters.ymTo || meta.ymMax;
+    const { from, to } = resolveYmRange(meta.ymList, ymFrom, ymTo);
+    return monthlySeries(view.filtered, monthly, meta.nMonths, filters.nati, from, to);
+  }, [meta, monthly, view, filters.nati, filters.ymFrom, filters.ymTo]);
 
-  const aiScopeLabel = useMemo(() => formatAiScope(aiFilters), [aiFilters]);
+  const trendYmList = useMemo(() => {
+    if (!meta) return [];
+    const ymFrom = filters.ymFrom || meta.ymMin;
+    const ymTo = filters.ymTo || meta.ymMax;
+    const { from, to } = resolveYmRange(meta.ymList, ymFrom, ymTo);
+    return meta.ymList.slice(from, to + 1);
+  }, [meta, filters.ymFrom, filters.ymTo]);
+
+  const aiScopeLabel = useMemo(
+    () => (meta ? formatAiScope(aiFilters, meta.ymList) : ""),
+    [aiFilters, meta],
+  );
 
   const aiInsight = useMemo(() => {
     if (!meta) return null;
@@ -142,11 +171,28 @@ export default function HomePage() {
       </>
     );
   }
-  if (error || !meta || !view) {
+  if (error || !meta) {
     return (
       <>
         <PageHeader title="전국 POI 현황" />
         <ErrorState message={error ?? "데이터를 불러올 수 없습니다."} />
+      </>
+    );
+  }
+  if (!view) {
+    return (
+      <>
+        <PageHeader
+          title="전국 POI 현황"
+          subtitle="KT 통신데이터 기반 관광 관심지점(POI) 탄소배출량 대시보드"
+        />
+        <FilterBar
+          meta={meta}
+          filters={filters}
+          onChange={setFilters}
+          show={["sido", "sgg", "lcls", "mcls", "period"]}
+        />
+        <LoadingState label="월별 데이터 로딩 중…" />
       </>
     );
   }
@@ -187,7 +233,12 @@ export default function HomePage() {
         title="전국 POI 현황"
         subtitle="KT 통신데이터 기반 관광 관심지점(POI) 탄소배출량 대시보드"
       />
-      <FilterBar meta={meta} filters={filters} onChange={setFilters} show={["sido", "sgg", "lcls", "mcls"]} />
+      <FilterBar
+        meta={meta}
+        filters={filters}
+        onChange={setFilters}
+        show={["sido", "sgg", "lcls", "mcls", "period"]}
+      />
 
       <div className="content">
         <section className="ai-summary" aria-label="AI 인사이트 요약">
@@ -329,7 +380,7 @@ export default function HomePage() {
         <div className="grid" style={{ gridTemplateColumns: "1.3fr 1fr 1fr" }}>
           <Card title="월별 탄소배출량 추이" unit="방문자 / tCO₂e">
             {trend ? (
-              <EChart option={trendOption(meta.ymList, trend.visitors, trend.emission)} height={250} />
+              <EChart option={trendOption(trendYmList, trend.visitors, trend.emission)} height={250} />
             ) : (
               <LoadingState label="월별 데이터 로딩 중…" />
             )}
@@ -365,15 +416,22 @@ export default function HomePage() {
   );
 }
 
-function aggregateByRegion(filtered: Poi[], nati: Nati, level: "sido" | "sgg"): MapPoint[] {
+function aggregateByRegion(
+  filtered: Poi[],
+  nati: Nati,
+  ymFrom: string,
+  ymTo: string,
+  ymList: string[],
+  monthly: Record<string, number[]> | null,
+  level: "sido" | "sgg",
+): MapPoint[] {
   type Acc = { lon: number; lat: number; emission: number; visitors: number; count: number; label: string };
   const buckets = new Map<string, Acc>();
 
   for (const p of filtered) {
     if (!Number.isFinite(p.lon) || !Number.isFinite(p.lat)) continue;
     const key = level === "sido" ? p.sido : p.sgg;
-    const emission = poiEmission(p, nati);
-    const visitors = poiVisitors(p, nati);
+    const { visitors, emission } = poiScopedMetrics(p, nati, ymFrom, ymTo, ymList, monthly);
     const cur = buckets.get(key);
     if (!cur) {
       buckets.set(key, {
@@ -434,8 +492,11 @@ function boundsFromPoints(
   ];
 }
 
-function formatAiScope(f: Filters): string {
+function formatAiScope(f: Filters, ymList: string[]): string {
   const parts: string[] = [];
+  if (f.ymFrom && f.ymTo && !isFullYmRange(ymList, f.ymFrom, f.ymTo)) {
+    parts.push(`${fmtYmFull(f.ymFrom)}~${fmtYmFull(f.ymTo)}`);
+  }
   if (f.sido === ALL) parts.push("전국");
   else if (f.sgg === ALL) parts.push(f.sido);
   else parts.push(`${f.sido} ${f.sgg}`);

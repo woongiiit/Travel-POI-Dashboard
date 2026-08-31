@@ -19,10 +19,11 @@ import { PageHeader, Card, Kpi, LoadingState, ErrorState, Select, InsightBlock }
 import { EChart } from "@/components/charts/EChart";
 import { MapView, type MapPoint } from "@/components/MapView";
 import { ImageLightbox } from "@/components/ImageLightbox";
-import { ALL } from "@/lib/aggregate";
+import { PeriodRangeField } from "@/components/PeriodRangeField";
+import { ALL, isFullYmRange, poiScopedMetrics, resolveYmRange } from "@/lib/aggregate";
 import { compareBarOption, trendOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
-import { fmtEmission, fmtInt, fmtNum, fmtYmFull } from "@/lib/format";
+import { fmtEmission, fmtInt, fmtNum } from "@/lib/format";
 import type { Poi, PoiDetail } from "@/lib/types";
 
 export default function RegionPage() {
@@ -43,10 +44,18 @@ function RegionPageContent() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [photoOpen, setPhotoOpen] = useState(false);
   const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
+  const [ymFrom, setYmFrom] = useState("");
+  const [ymTo, setYmTo] = useState("");
 
   useEffect(() => {
     loadMonthly().then(setMonthly);
   }, [loadMonthly]);
+
+  useEffect(() => {
+    if (!meta || (ymFrom && ymTo)) return;
+    setYmFrom(meta.ymMin);
+    setYmTo(meta.ymMax);
+  }, [meta, ymFrom, ymTo]);
 
   // 초기 시도/POI 선택 (URL ?poi= 파라미터 우선)
   useEffect(() => {
@@ -73,6 +82,16 @@ function RegionPageContent() {
     setSido(meta.filters.sido[0] ?? "");
   }, [meta, pois, sido, searchParams]);
 
+  const ymFromR = ymFrom || meta?.ymMin || "";
+  const ymToR = ymTo || meta?.ymMax || "";
+  const periodReady = !meta || isFullYmRange(meta.ymList, ymFromR, ymToR) || !!monthly;
+  const { from: ymFromIdx, to: ymToIdx, nMonths: periodMonths } =
+    meta ? resolveYmRange(meta.ymList, ymFromR, ymToR) : { from: 0, to: 0, nMonths: 0 };
+  const metrics = useMemo(() => {
+    if (!meta) return (_p: Poi) => ({ visitors: 0, emission: 0 });
+    return (p: Poi) => poiScopedMetrics(p, ALL, ymFromR, ymToR, meta.ymList, monthly);
+  }, [meta, ymFromR, ymToR, monthly]);
+
   const regionPois = useMemo(() => {
     if (!sido) return [];
     return pois
@@ -89,6 +108,11 @@ function RegionPageContent() {
   const selected = useMemo(
     () => pois.find((p) => p.id === selectedId) ?? null,
     [pois, selectedId],
+  );
+
+  const selectedM = useMemo(
+    () => (selected ? metrics(selected) : null),
+    [selected, metrics],
   );
 
   // KTO 상세(사진/좌표) 조회
@@ -110,17 +134,18 @@ function RegionPageContent() {
     const sameSgg = pois.filter((p) => p.sido === selected.sido && p.sgg === selected.sgg);
     const avg = (arr: Poi[], f: (p: Poi) => number) =>
       arr.length ? arr.reduce((s, p) => s + f(p), 0) / arr.length : 0;
-    const mclsAvg = avg(sameMcls, (p) => p.e);
-    const sggAvg = avg(sameSgg, (p) => p.e);
+    const selfE = metrics(selected).emission;
+    const mclsAvg = avg(sameMcls, (p) => metrics(p).emission);
+    const sggAvg = avg(sameSgg, (p) => metrics(p).emission);
     return {
-      selfE: selected.e,
+      selfE,
       mclsAvg,
       sggAvg,
-      vsMcls: mclsAvg ? ((selected.e - mclsAvg) / mclsAvg) * 100 : 0,
-      vsSgg: sggAvg ? ((selected.e - sggAvg) / sggAvg) * 100 : 0,
+      vsMcls: mclsAvg ? ((selfE - mclsAvg) / mclsAvg) * 100 : 0,
+      vsSgg: sggAvg ? ((selfE - sggAvg) / sggAvg) * 100 : 0,
       sameMcls,
     };
-  }, [selected, pois]);
+  }, [selected, pois, metrics]);
 
   const ranking = useMemo(() => {
     if (!selected || !compare) return [];
@@ -143,29 +168,36 @@ function RegionPageContent() {
     const nearby = regionPois.slice(0, 40);
     const set = new Map<string, MapPoint>();
     for (const p of nearby) {
+      const m = metrics(p);
       set.set(p.id, {
         id: p.id,
         lon: detail?.mapx && p.id === selected.id ? detail.mapx : p.lon,
         lat: detail?.mapy && p.id === selected.id ? detail.mapy : p.lat,
         name: p.nm,
         sub: `${p.sgg} · ${p.lcls}`,
-        emission: p.e,
-        visitors: p.v,
+        emission: m.emission,
+        visitors: m.visitors,
         highlight: p.id === selected.id,
       });
     }
     return [...set.values()];
-  }, [regionPois, selected, detail]);
+  }, [regionPois, selected, detail, metrics]);
 
   const selTrend = useMemo(() => {
     if (!selected || !monthly || !meta) return null;
     const arr = monthly[selected.id];
     if (!arr) return null;
-    return { visitors: arr, emission: arr.map((v) => (v * selected.pc) / 1000) };
-  }, [selected, monthly, meta]);
+    const slice = arr.slice(ymFromIdx, ymToIdx + 1);
+    return {
+      visitors: slice,
+      emission: slice.map((v) => (v * selected.pc) / 1000),
+      ymList: meta.ymList.slice(ymFromIdx, ymToIdx + 1),
+    };
+  }, [selected, monthly, meta, ymFromIdx, ymToIdx]);
 
   if (loading) return (<><PageHeader title="지역·POI 상세 분석" /><LoadingState /></>);
   if (error || !meta) return (<><PageHeader title="지역·POI 상세 분석" /><ErrorState message={error ?? "오류"} /></>);
+  if (!periodReady) return (<><PageHeader title="지역·POI 상세 분석" /><LoadingState label="월별 데이터 로딩 중…" /></>);
 
   const sggOptions = sido ? [ALL, ...(meta.filters.sggBySido[sido] ?? [])] : [ALL];
   const center: [number, number] | undefined =
@@ -188,9 +220,12 @@ function RegionPageContent() {
             ))}
           </select>
         </div>
-        <div style={{ marginLeft: "auto", alignSelf: "flex-end", fontSize: 11, color: "var(--text-faint)" }}>
-          기간 {fmtYmFull(meta.ymMin)} ~ {fmtYmFull(meta.ymMax)}
-        </div>
+        <PeriodRangeField
+          meta={meta}
+          ymFrom={ymFrom}
+          ymTo={ymTo}
+          onChange={(f, t) => { setYmFrom(f); setYmTo(t); }}
+        />
       </div>
 
       {!selected ? (
@@ -198,11 +233,11 @@ function RegionPageContent() {
       ) : (
         <div className="content">
           <div className="kpi-row">
-            <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="선택 POI 탄소배출량" value={fmtEmission(selected.e)} unit="tCO₂e"
+            <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="선택 POI 탄소배출량" value={fmtEmission(selectedM!.emission)} unit="tCO₂e"
               sub={<span className={selected.pc <= 1 ? "down" : "up"}>{selected.pc <= 1 ? "저배출" : "고배출"} · 1인당 {fmtNum(selected.pc, 2)}kg</span>} />
-            <Kpi variant="blue" icon={<AppIcon icon={Users} />} label="총 방문자 수" value={fmtInt(selected.v)} unit="명"
-              sub={`월평균 ${fmtInt(selected.v / meta.nMonths)}명`} />
-            <Kpi variant="purple" icon={<AppIcon icon={Award} />} label="전국 POI 배출 순위" value={`상위 ${rankPct(pois, selected)}%`}
+            <Kpi variant="blue" icon={<AppIcon icon={Users} />} label="총 방문자 수" value={fmtInt(selectedM!.visitors)} unit="명"
+              sub={`월평균 ${fmtInt(selectedM!.visitors / periodMonths)}명`} />
+            <Kpi variant="purple" icon={<AppIcon icon={Award} />} label="전국 POI 배출 순위" value={`상위 ${rankPct(pois, selected, metrics)}%`}
               sub={`${fmtInt(pois.length)}개 중`} />
             <Kpi variant="amber" icon={<AppIcon icon={Tags} />} label="카테고리" value={selected.lcls}
               sub={`${selected.mcls} › ${selected.scls}`} />
@@ -260,8 +295,8 @@ function RegionPageContent() {
                 </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
-                <MiniStat label="탄소배출량(총)" value={`${fmtEmission(selected.e)} tCO₂e`} note={`1인당 ${fmtNum(selected.pc, 2)} kgCO₂e`} />
-                <MiniStat label="월평균 방문자" value={`${fmtInt(selected.v / meta.nMonths)} 명`} note={`총 ${fmtInt(selected.v)}명`} />
+                <MiniStat label="탄소배출량(총)" value={`${fmtEmission(selectedM!.emission)} tCO₂e`} note={`1인당 ${fmtNum(selected.pc, 2)} kgCO₂e`} />
+                <MiniStat label="월평균 방문자" value={`${fmtInt(selectedM!.visitors / periodMonths)} 명`} note={`총 ${fmtInt(selectedM!.visitors)}명`} />
               </div>
               {detail?.source === "fallback" && (
                 <div style={{ marginTop: 8, fontSize: 10.5, color: "var(--text-faint)" }}>
@@ -300,7 +335,7 @@ function RegionPageContent() {
           <div className="grid" style={{ gridTemplateColumns: "1.3fr 1.2fr 1fr" }}>
             <Card title="선택 POI 월별 추이" unit="방문자 / tCO₂e">
               {selTrend ? (
-                <EChart option={trendOption(meta.ymList, selTrend.visitors, selTrend.emission)} height={240} />
+                <EChart option={trendOption(selTrend.ymList, selTrend.visitors, selTrend.emission)} height={240} />
               ) : (
                 <LoadingState label="월별 데이터 로딩 중…" />
               )}
@@ -322,7 +357,7 @@ function RegionPageContent() {
                         </td>
                         <td className="muted">{p.sgg}</td>
                         <td className="num">{fmtNum(p.pc, 2)}</td>
-                        <td className="num" style={{ fontWeight: 600 }}>{fmtEmission(p.e)}</td>
+                        <td className="num" style={{ fontWeight: 600 }}>{fmtEmission(metrics(p).emission)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -338,7 +373,7 @@ function RegionPageContent() {
                   tone="green"
                   onClick={() => setSelectedId(p.id)}
                   title={<>{p.nm} <span className="badge badge--green">저탄소</span></>}
-                  text={`${p.sgg} · 1인당 ${fmtNum(p.pc, 2)} kgCO₂e · 총 ${fmtEmission(p.e)} tCO₂e`}
+                  text={`${p.sgg} · 1인당 ${fmtNum(p.pc, 2)} kgCO₂e · 총 ${fmtEmission(metrics(p).emission)} tCO₂e`}
                 />
               )) : <div className="insight__text">동일 중분류 내 더 낮은 배출 POI가 없습니다.</div>}
               <InsightBlock
@@ -357,8 +392,8 @@ function RegionPageContent() {
   );
 }
 
-function rankPct(pois: Poi[], sel: Poi): number {
-  const sorted = [...pois].sort((a, b) => b.e - a.e);
+function rankPct(pois: Poi[], sel: Poi, metrics: (p: Poi) => { emission: number }): number {
+  const sorted = [...pois].sort((a, b) => metrics(b).emission - metrics(a).emission);
   const idx = sorted.findIndex((p) => p.id === sel.id);
   return Math.max(1, Math.round(((idx + 1) / pois.length) * 100));
 }
