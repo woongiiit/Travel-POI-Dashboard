@@ -7,7 +7,7 @@ POI 최종 엑셀(와이드) -> 대시보드용 집계 JSON 빌드.
   - factors.json, meta.json, pois.json, poi_monthly.json
 
 UI/스키마 호환:
-  - 현지인·외지인 미제공 → 전체를 v·vL에 넣고 vO=0 (필터 UI는 유지)
+  - (kt)관광지_현지인_외지인.xlsx → cont_id별 vL(현지인)·vO(외지인) 집계
   - 소분류 미제공 → scls=중분류
   - cont_id 미제공 → 기존 pois.json 이름·시도·시군구 매칭으로 회수, 없으면 안정 해시 ID
   - 월별 탄소 수식값 미캐시 → 방문자×계수×가중치×EWrt 로 재계산
@@ -17,9 +17,53 @@ from datetime import date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "참고자료", "■중요■POI_최종(260723).xlsx")
+REF_DIR = os.path.join(ROOT, "참고자료")
 SHEET = "POI_탄소발자국"
 OUT = os.path.join(ROOT, "data")
 os.makedirs(OUT, exist_ok=True)
+
+
+def find_kt_nati_src() -> str | None:
+    """참고자료/(kt)관광지_현지인_외지인.xlsx 탐색."""
+    if not os.path.isdir(REF_DIR):
+        return None
+    for name in os.listdir(REF_DIR):
+        lower = name.lower()
+        if (
+            name.endswith(".xlsx")
+            and not name.startswith("~")
+            and "kt" in lower
+            and "xlsx" in lower
+        ):
+            return os.path.join(REF_DIR, name)
+    return None
+
+
+def load_nati_totals(path: str) -> dict[str, dict[str, float]]:
+    """cont_id → {vL, vO} (현지인·외지인 누적 방문자)."""
+    print("loading nati workbook...", path)
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    sheet = "result" if "result" in wb.sheetnames else wb.sheetnames[0]
+    ws = wb[sheet]
+    out: dict[str, dict[str, float]] = {}
+    rows = 0
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        cid = str(row[1]).strip() if row[1] is not None else ""
+        nati = str(row[3]).strip() if row[3] is not None else ""
+        val = num(row[9])
+        if not cid:
+            continue
+        bucket = out.setdefault(cid, {"vL": 0.0, "vO": 0.0})
+        if nati == "현지인":
+            bucket["vL"] += val
+        elif nati == "외지인":
+            bucket["vO"] += val
+        rows += 1
+        if rows % 200000 == 0:
+            print("  nati rows:", rows)
+    wb.close()
+    print("nati rows:", rows, "ids:", len(out))
+    return out
 
 with open(os.path.join(ROOT, "scripts", "factors.json"), encoding="utf-8") as f:
     FCONF = json.load(f)
@@ -127,6 +171,11 @@ def ewrt_for_ym(ym: str, ewrt23: float, ewrt24: float) -> float:
 
 
 print("loading workbook...", SRC)
+KT_SRC = find_kt_nati_src()
+NATI_TOTALS = load_nati_totals(KT_SRC) if KT_SRC else {}
+if not NATI_TOTALS:
+    print("WARN: KT 현지인·외지인 파일 없음 → vO=0 fallback")
+
 wb = openpyxl.load_workbook(SRC, read_only=True, data_only=True)
 if SHEET not in wb.sheetnames:
     raise SystemExit(f"시트 '{SHEET}' 없음. sheets={wb.sheetnames}")
@@ -195,6 +244,23 @@ for row in it:
     # UI pc: 실효 1인당 kg (총배출kg / 총방문자)
     pc = (total_e_kg / total_v) if total_v > 0 else round(coef * weight, 3)
 
+    nati = NATI_TOTALS.get(cont_id)
+    if nati:
+        kt_total = nati["vL"] + nati["vO"]
+        if kt_total > 0 and total_v > 0:
+            scale = total_v / kt_total
+            vL = round(nati["vL"] * scale, 1)
+            vO = round(nati["vO"] * scale, 1)
+        elif kt_total > 0:
+            vL = round(nati["vL"], 1)
+            vO = round(nati["vO"], 1)
+        else:
+            vL = round(total_v, 1)
+            vO = 0.0
+    else:
+        vL = round(total_v, 1)
+        vO = 0.0
+
     p = {
         "id": cont_id,
         "nm": str(nm).strip(),
@@ -204,8 +270,8 @@ for row in it:
         "mcls": mcls,
         "scls": mcls,  # 소분류 없음 → 중분류로 채움 (UI 유지)
         "v": round(total_v, 1),
-        "vL": round(total_v, 1),  # 유형 미분리 → 전체에 귀속
-        "vO": 0.0,
+        "vL": vL,
+        "vO": vO,
         "e": round(total_e_kg / 1000.0, 2),
         "pc": round(pc, 3),
     }

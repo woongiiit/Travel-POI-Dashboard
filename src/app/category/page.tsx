@@ -19,6 +19,7 @@ import { PageHeader, Card, Kpi, LoadingState, ErrorState, Select, InsightBlock }
 import { EChart } from "@/components/charts/EChart";
 import {
   ALL,
+  aggregateVisitorBreakdown,
   applyFilters,
   groupBy,
   isFullYmRange,
@@ -63,9 +64,10 @@ export default function CategoryPage() {
     const totalRegionE = regionPois.reduce((s, p) => s + metrics(p).emission, 0);
     const selE = selPois.reduce((s, p) => s + metrics(p).emission, 0);
     const selV = selPois.reduce((s, p) => s + metrics(p).visitors, 0);
+    const visitorBreakdown = aggregateVisitorBreakdown(selPois, metrics);
     const lclsGroups = groupBy(regionPois, nati, (p) => p.lcls, undefined, metrics);
     const mclsGroups = groupBy(regionPois, nati, (p) => p.mcls, (p) => p.mcls, metrics);
-    return { regionPois, selPois, totalRegionE, selE, selV, lclsGroups, mclsGroups };
+    return { regionPois, selPois, totalRegionE, selE, selV, visitorBreakdown, lclsGroups, mclsGroups };
   }, [meta, pois, sido, lcls, mcls, nati, ymFromR, ymToR, monthly, periodReady]);
 
   const trend = useMemo(() => {
@@ -135,7 +137,17 @@ export default function CategoryPage() {
         <div className="kpi-row">
           <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="선택 카테고리 총 배출량" value={fmtEmission(view.selE)} unit="tCO₂e" sub={catLabel} />
           <Kpi variant="blue" icon={<AppIcon icon={PieChart} />} label="전체 대비 비중" value={fmtNum(sharePct, 1)} unit="%" sub={`${scope} 배출량 대비`} />
-          <Kpi variant="blue" icon={<AppIcon icon={Users} />} label="총 방문자 수" value={fmtInt(view.selV)} unit="명" />
+          <Kpi
+            variant="blue"
+            icon={<AppIcon icon={Users} />}
+            label="총 방문자 수"
+            value={fmtInt(view.selV)}
+            unit="명"
+            hoverBreakdown={[
+              { label: "현지인", value: fmtInt(view.visitorBreakdown.local), unit: "명" },
+              { label: "외지인", value: fmtInt(view.visitorBreakdown.outOfRegion), unit: "명" },
+            ]}
+          />
           <Kpi variant="amber" icon={<AppIcon icon={MapPin} />} label="POI 수" value={fmtInt(view.selPois.length)} unit="개" />
           <Kpi
             variant={trend && trend.yoy >= 0 ? "red" : "green"}

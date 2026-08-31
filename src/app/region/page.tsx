@@ -20,7 +20,7 @@ import { EChart } from "@/components/charts/EChart";
 import { MapView, type MapPoint } from "@/components/MapView";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { PeriodRangeField } from "@/components/PeriodRangeField";
-import { ALL, isFullYmRange, poiScopedMetrics, resolveYmRange } from "@/lib/aggregate";
+import { ALL, isFullYmRange, poiScopedMetrics, poiVisitorBreakdown, resolveYmRange } from "@/lib/aggregate";
 import { compareBarOption, trendOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
 import { fmtEmission, fmtInt, fmtNum } from "@/lib/format";
@@ -202,6 +202,8 @@ function RegionPageContent() {
   const sggOptions = sido ? [ALL, ...(meta.filters.sggBySido[sido] ?? [])] : [ALL];
   const center: [number, number] | undefined =
     selected ? [detail?.mapx ?? selected.lon, detail?.mapy ?? selected.lat] : undefined;
+  const selectedVisitorBreakdown =
+    selected && selectedM ? poiVisitorBreakdown(selected, selectedM.visitors) : null;
 
   return (
     <>
@@ -235,8 +237,22 @@ function RegionPageContent() {
           <div className="kpi-row">
             <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="선택 POI 탄소배출량" value={fmtEmission(selectedM!.emission)} unit="tCO₂e"
               sub={<span className={selected.pc <= 1 ? "down" : "up"}>{selected.pc <= 1 ? "저배출" : "고배출"} · 1인당 {fmtNum(selected.pc, 2)}kg</span>} />
-            <Kpi variant="blue" icon={<AppIcon icon={Users} />} label="총 방문자 수" value={fmtInt(selectedM!.visitors)} unit="명"
-              sub={`월평균 ${fmtInt(selectedM!.visitors / periodMonths)}명`} />
+            <Kpi
+              variant="blue"
+              icon={<AppIcon icon={Users} />}
+              label="총 방문자 수"
+              value={fmtInt(selectedM!.visitors)}
+              unit="명"
+              sub={`월평균 ${fmtInt(selectedM!.visitors / periodMonths)}명`}
+              hoverBreakdown={
+                selectedVisitorBreakdown
+                  ? [
+                      { label: "현지인", value: fmtInt(selectedVisitorBreakdown.local), unit: "명" },
+                      { label: "외지인", value: fmtInt(selectedVisitorBreakdown.outOfRegion), unit: "명" },
+                    ]
+                  : undefined
+              }
+            />
             <Kpi variant="purple" icon={<AppIcon icon={Award} />} label="전국 POI 배출 순위" value={`상위 ${rankPct(pois, selected, metrics)}%`}
               sub={`${fmtInt(pois.length)}개 중`} />
             <Kpi variant="amber" icon={<AppIcon icon={Tags} />} label="카테고리" value={selected.lcls}

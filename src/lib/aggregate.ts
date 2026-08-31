@@ -165,6 +165,40 @@ export function aggregate(
   };
 }
 
+export interface VisitorBreakdown {
+  local: number;
+  outOfRegion: number;
+}
+
+/** 선택 기간 방문자를 POI별 vL/vO 비율로 현지인·외지인 안분 */
+export function aggregateVisitorBreakdown(
+  pois: Poi[],
+  metricsFn: (p: Poi) => { visitors: number },
+): VisitorBreakdown {
+  let local = 0;
+  let outOfRegion = 0;
+  for (const p of pois) {
+    const v = metricsFn(p).visitors;
+    if (p.v > 0) {
+      local += v * (p.vL / p.v);
+      outOfRegion += v * (p.vO / p.v);
+    } else {
+      local += v;
+    }
+  }
+  return { local, outOfRegion };
+}
+
+export function poiVisitorBreakdown(p: Poi, visitors: number): VisitorBreakdown {
+  if (p.v > 0) {
+    return {
+      local: visitors * (p.vL / p.v),
+      outOfRegion: visitors * (p.vO / p.v),
+    };
+  }
+  return { local: visitors, outOfRegion: 0 };
+}
+
 export interface Group {
   key: string;
   label: string;

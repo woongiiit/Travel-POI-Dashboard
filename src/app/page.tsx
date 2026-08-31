@@ -26,6 +26,7 @@ import { MapView, type MapPoint } from "@/components/MapView";
 import {
   ALL,
   aggregate,
+  aggregateVisitorBreakdown,
   applyFilters,
   defaultFilters,
   defaultFiltersForMeta,
@@ -83,6 +84,7 @@ export default function HomePage() {
     const { nMonths } = resolveYmRange(meta.ymList, ymFrom, ymTo);
 
     const agg = aggregate(filtered, filters.nati, nMonths, 1.0, metrics);
+    const visitorBreakdown = aggregateVisitorBreakdown(filtered, metrics);
     const lclsGroups = groupBy(filtered, filters.nati, (p) => p.lcls, undefined, metrics);
     const sidoGroups = groupBy(filtered, filters.nati, (p) => p.sido, undefined, metrics);
 
@@ -115,7 +117,7 @@ export default function HomePage() {
           ? aggregateByRegion(filtered, filters.nati, ymFrom, ymTo, meta.ymList, monthly, "sgg")
           : null;
 
-    return { filtered, agg, lclsGroups, sidoGroups, top10, points, overviewPoints };
+    return { filtered, agg, visitorBreakdown, lclsGroups, sidoGroups, top10, points, overviewPoints };
   }, [meta, pois, filters, monthly]);
 
   const trend = useMemo(() => {
@@ -197,7 +199,7 @@ export default function HomePage() {
     );
   }
 
-  const { agg, lclsGroups, sidoGroups, top10, points, overviewPoints } = view;
+  const { agg, visitorBreakdown, lclsGroups, sidoGroups, top10, points, overviewPoints } = view;
   const totalEmission = agg.totalEmission;
   const maxE = Math.max(
     1,
@@ -303,7 +305,18 @@ export default function HomePage() {
 
         <div className="kpi-row">
           <Kpi variant="blue" icon={<AppIcon icon={MapPin} />} label="총 POI 수" value={fmtInt(agg.count)} unit="개" sub={`${scopeLabel} 기준`} />
-          <Kpi variant="blue" icon={<AppIcon icon={Users} />} label="총 방문자 수" value={fmtKorUnit(agg.totalVisitors)} unit="명" sub="누적 방문자" />
+          <Kpi
+            variant="blue"
+            icon={<AppIcon icon={Users} />}
+            label="총 방문자 수"
+            value={fmtKorUnit(agg.totalVisitors)}
+            unit="명"
+            sub="누적 방문자"
+            hoverBreakdown={[
+              { label: "현지인", value: fmtKorUnit(visitorBreakdown.local), unit: "명" },
+              { label: "외지인", value: fmtKorUnit(visitorBreakdown.outOfRegion), unit: "명" },
+            ]}
+          />
           <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="총 탄소배출량" value={fmtEmission(totalEmission)} unit="tCO₂e" sub="추정 배출량" />
           <Kpi variant="green" icon={<AppIcon icon={Leaf} />} label="1인당 평균 배출량" value={fmtNum(agg.perCapitaKg, 2)} unit="kgCO₂e" sub="방문자 1인당" />
           <Kpi variant="amber" icon={<AppIcon icon={PieChart} />} label="상위 10개 POI 비중" value={fmtNum(agg.top10Share, 1)} unit="%" sub="배출 집중도" />

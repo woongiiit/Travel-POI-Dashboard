@@ -1,6 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Plus } from "lucide-react";
+import { AppIcon } from "@/components/icons";
 
 export type KpiVariant = "blue" | "green" | "purple" | "amber" | "teal" | "neutral" | "red";
 
@@ -56,6 +58,8 @@ export function Card({
   );
 }
 
+export type KpiHoverRow = { label: string; value: ReactNode; unit?: string };
+
 export function Kpi({
   icon,
   variant = "blue",
@@ -63,6 +67,7 @@ export function Kpi({
   value,
   unit,
   sub,
+  hoverBreakdown,
 }: {
   icon: ReactNode;
   variant?: KpiVariant;
@@ -70,17 +75,42 @@ export function Kpi({
   value: ReactNode;
   unit?: string;
   sub?: ReactNode;
+  hoverBreakdown?: KpiHoverRow[];
 }) {
+  const hoverable = hoverBreakdown && hoverBreakdown.length > 0;
+
   return (
-    <div className={`kpi kpi--${variant}`}>
+    <div
+      className={`kpi kpi--${variant}${hoverable ? " kpi--hoverable" : ""}`}
+      tabIndex={hoverable ? 0 : undefined}
+      title={hoverable ? "마우스를 올리면 현지인·외지인 상세를 볼 수 있습니다" : undefined}
+    >
+      {hoverable && (
+        <span className="kpi__expand-hint" aria-hidden="true">
+          <AppIcon icon={Plus} size={12} strokeWidth={2.75} />
+        </span>
+      )}
       <div className="kpi__icon">{icon}</div>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div className="kpi__label">{label}</div>
         <div className="kpi__value">
           {value}
           {unit && <small>{unit}</small>}
         </div>
         {sub && <div className="kpi__sub">{sub}</div>}
+        {hoverable && (
+          <div className="kpi__breakdown" aria-hidden="true">
+            {hoverBreakdown.map((row) => (
+              <div key={row.label} className="kpi__breakdown-row">
+                <span>{row.label}</span>
+                <strong>
+                  {row.value}
+                  {row.unit && <small>{row.unit}</small>}
+                </strong>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

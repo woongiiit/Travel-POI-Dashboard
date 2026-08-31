@@ -648,6 +648,90 @@ button {
   color: var(--text-faint);
 }
 
+.kpi--hoverable {
+  position: relative;
+  cursor: pointer;
+  align-items: flex-start;
+}
+
+.kpi--hoverable .kpi__icon {
+  margin-top: 2px;
+}
+
+.kpi__expand-hint {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #d6e6fb;
+  color: #2563c9;
+  border: 1px solid rgba(37, 99, 201, 0.35);
+  opacity: 1;
+  pointer-events: none;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.kpi--hoverable:hover .kpi__expand-hint,
+.kpi--hoverable:focus-within .kpi__expand-hint {
+  opacity: 0;
+  transform: rotate(45deg) scale(0.85);
+}
+
+.kpi__breakdown {
+  display: grid;
+  gap: 5px;
+  margin-top: 0;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    max-height 0.2s ease,
+    opacity 0.2s ease,
+    margin-top 0.2s ease;
+}
+
+.kpi--hoverable:hover .kpi__breakdown,
+.kpi--hoverable:focus-within .kpi__breakdown {
+  max-height: 64px;
+  opacity: 1;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.kpi__breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.kpi__breakdown-row span:first-child {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.kpi__breakdown-row strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.kpi__breakdown-row strong small {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+
 /* ---------- Table ---------- */
 .tbl {
   width: 100%;
