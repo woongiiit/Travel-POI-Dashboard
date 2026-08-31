@@ -79,6 +79,7 @@ export default function DiscoverPage() {
   const { meta, pois, loading, error, loadMonthly } = useDataset();
   const router = useRouter();
   const [sido, setSido] = useState<string>(ALL);
+  const [sgg, setSgg] = useState<string>(ALL);
   const [lcls, setLcls] = useState<string>(ALL);
   const [mcls, setMcls] = useState<string>(ALL);
   const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
@@ -107,6 +108,7 @@ export default function DiscoverPage() {
     const f = pois.filter(
       (p) =>
         (sido === ALL || p.sido === sido) &&
+        (sgg === ALL || p.sgg === sgg) &&
         (lcls === ALL || p.lcls === lcls) &&
         (mcls === ALL || p.mcls === mcls),
     );
@@ -149,10 +151,10 @@ export default function DiscoverPage() {
       f, scored, medV, medPc, eligible, lowPopular, candidates, hidden, quadrants,
       routes: routeSgg.size,
     };
-  }, [meta, pois, sido, lcls, mcls, ymFromR, ymToR, monthly, periodReady]);
+  }, [meta, pois, sido, sgg, lcls, mcls, ymFromR, ymToR, monthly, periodReady]);
 
-  const scatterConfig = useMemo(() => {
-    if (!data) return null;
+  const scatterSample = useMemo(() => {
+    if (!data) return { picked: [] as Scored[], positionPoints: [] as PositioningPoint[] };
     const buckets = new Map<QuadrantKey, Scored[]>();
     for (const p of data.scored) {
       const q = quadrantOf(p.mv, p.pc, data.medV, data.medPc);
@@ -164,7 +166,7 @@ export default function DiscoverPage() {
     const picked = (Object.keys(QUADRANT_META) as QuadrantKey[]).flatMap((q) =>
       sampleN(buckets.get(q) ?? [], SAMPLE_PER_QUADRANT, rand),
     );
-    const points: PositioningPoint[] = picked.map((p) => ({
+    const positionPoints: PositioningPoint[] = picked.map((p) => ({
       id: p.id,
       name: p.nm,
       sgg: p.sgg,
@@ -173,8 +175,51 @@ export default function DiscoverPage() {
       perCapita: p.pc,
       emission: p.e,
     }));
-    return scatterOption(points, data.medV, data.medPc);
+    return { picked, positionPoints };
   }, [data, sampleSeed]);
+
+  const scatterConfig = useMemo(() => {
+    if (!data) return null;
+    return scatterOption(scatterSample.positionPoints, data.medV, data.medPc);
+  }, [data, scatterSample]);
+
+  const mapPoints: MapPoint[] = useMemo(() => {
+    if (!data) return [];
+    return scatterSample.picked
+      .filter((p) => Number.isFinite(p.lon) && Number.isFinite(p.lat))
+      .map((p) => {
+        const q = quadrantOf(p.mv, p.pc, data.medV, data.medPc);
+        return {
+          id: p.id,
+          lon: p.lon,
+          lat: p.lat,
+          name: p.nm,
+          sub: `${QUADRANT_META[q].note} · ${p.sgg}`,
+          emission: p.e,
+          visitors: p.v,
+          radius: Math.min(18, Math.max(8, 7 + 3.2 * Math.log10(Math.max(p.e, 1) + 1))),
+        };
+      });
+  }, [scatterSample, data]);
+
+  const mapBounds = useMemo(() => {
+    const scatterCoords = scatterSample.picked.filter(
+      (p) => Number.isFinite(p.lon) && Number.isFinite(p.lat),
+    );
+    if (scatterCoords.length) return boundsFromPoints(scatterCoords);
+    if (sido === ALL) return null;
+    const region = pois.filter(
+      (p) =>
+        p.sido === sido &&
+        (sgg === ALL || p.sgg === sgg) &&
+        Number.isFinite(p.lon) &&
+        Number.isFinite(p.lat),
+    );
+    return boundsFromPoints(region);
+  }, [pois, sido, sgg, scatterSample]);
+
+  const mapFitMaxZoom = sgg !== ALL ? 12 : 9;
+  const mapFitMinZoom = sgg !== ALL ? 9.5 : 7;
 
   if (loading) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><LoadingState /></>);
   if (error || !meta) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><ErrorState message={error ?? "오류"} /></>);
@@ -182,6 +227,7 @@ export default function DiscoverPage() {
   if (!data) return (<><PageHeader title="저탄소 관광콘텐츠 발굴" /><LoadingState /></>);
 
   const mclsOptions = lcls === ALL ? [ALL] : [ALL, ...(meta.filters.mclsByLcls[lcls] ?? [])];
+  const sggOptions = sido === ALL ? [ALL] : [ALL, ...(meta.filters.sggBySido[sido] ?? [])];
 
   const recommend = data.eligible.filter((p) => p.grade !== "C").slice(0, 12);
 
@@ -194,16 +240,19 @@ export default function DiscoverPage() {
     router.push(`/region?${query.toString()}`);
   };
 
-  const mapPoints: MapPoint[] = data.eligible.slice(0, 120).map((p) => ({
-    id: p.id, lon: p.lon, lat: p.lat, name: p.nm,
-    sub: `${p.sgg} · ${p.grade}등급`, emission: p.e, visitors: p.v,
-  }));
+  const handleMapSelect = (id: string) => {
+    const poi = pois.find((p) => p.id === id);
+    if (!poi) return;
+    const query = new URLSearchParams({ poi: id, sido: poi.sido, sgg: poi.sgg });
+    router.push(`/region?${query.toString()}`);
+  };
 
   return (
     <>
       <PageHeader title="저탄소 관광콘텐츠 발굴" subtitle="인기와 탄소배출량을 함께 고려한 POI 추천 분석" />
       <div className="filterbar">
-        <Select label="지역" icon={<AppIcon icon={MapPin} size={14} />} value={sido} options={[ALL, ...meta.filters.sido]} onChange={setSido} />
+        <Select label="지역" icon={<AppIcon icon={MapPin} size={14} />} value={sido} options={[ALL, ...meta.filters.sido]} onChange={(v) => { setSido(v); setSgg(ALL); }} />
+        <Select label="시군구" icon={<AppIcon icon={MapPin} size={14} />} value={sgg} options={sggOptions} onChange={setSgg} />
         <Select label="대분류" icon={<AppIcon icon={Tags} size={14} />} value={lcls} options={[ALL, ...meta.filters.lcls]} onChange={(v) => { setLcls(v); setMcls(ALL); }} />
         <Select label="중분류" icon={<AppIcon icon={TrendingUp} size={14} />} value={mcls} options={mclsOptions} onChange={setMcls} />
         <PeriodRangeField
@@ -273,8 +322,15 @@ export default function DiscoverPage() {
         </div>
 
         <div className="grid" style={{ gridTemplateColumns: "1fr 1.3fr 1fr" }}>
-          <Card title="지역별 저탄소 추천 POI 분포">
-            <MapView points={mapPoints} height={300} />
+          <Card title="지역별 저탄소 추천 POI 분포" foot="※ 포지셔닝 차트 표본 POI와 동일 · 클릭 시 상세로 이동">
+            <MapView
+              points={mapPoints}
+              height={300}
+              bounds={mapBounds}
+              fitMaxZoom={mapFitMaxZoom}
+              fitMinZoom={mapFitMinZoom}
+              onSelect={handleMapSelect}
+            />
           </Card>
 
           <Card title="저탄소 콘텐츠 발굴 로직">
@@ -330,6 +386,29 @@ function LogicBox({ no, title, desc, color }: { no: string; title: string; desc:
 function Plus() {
   return <div style={{ display: "grid", placeItems: "center", color: "var(--text-faint)", fontWeight: 700 }}>+</div>;
 }
+
+function boundsFromPoints(
+  points: { lon: number; lat: number }[],
+): [[number, number], [number, number]] | null {
+  if (!points.length) return null;
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+  for (const p of points) {
+    minLon = Math.min(minLon, p.lon);
+    minLat = Math.min(minLat, p.lat);
+    maxLon = Math.max(maxLon, p.lon);
+    maxLat = Math.max(maxLat, p.lat);
+  }
+  const padLon = Math.max((maxLon - minLon) * 0.12, 0.04);
+  const padLat = Math.max((maxLat - minLat) * 0.12, 0.04);
+  return [
+    [minLon - padLon, minLat - padLat],
+    [maxLon + padLon, maxLat + padLat],
+  ];
+}
+
 function Tip({ icon, tone, text }: { icon: React.ReactNode; tone: "green" | "blue" | "purple" | "amber"; text: string }) {
   return (
     <InsightBlock icon={icon} tone={tone} text={text} />

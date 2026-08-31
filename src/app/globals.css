@@ -152,14 +152,14 @@ button {
 
 .sidebar__brand-text strong {
   display: block;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.35;
   font-weight: 700;
   color: var(--sidebar-active-text);
 }
 
 .sidebar__brand-text span {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--sidebar-muted);
   margin-top: 2px;
   display: block;
