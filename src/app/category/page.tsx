@@ -32,6 +32,7 @@ import {
 import { hBarOption, lineOption, treemapOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
 import { fmtEmission, fmtInt, fmtNum } from "@/lib/format";
+import { buildEmissionMetaphors } from "@/lib/emission-metaphors";
 
 export default function CategoryPage() {
   const { meta, pois, loading, error, loadMonthly } = useDataset();
@@ -135,7 +136,15 @@ export default function CategoryPage() {
 
       <div className="content">
         <div className="kpi-row">
-          <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="선택 카테고리 총 배출량" value={fmtEmission(view.selE)} unit="tCO₂e" sub={catLabel} />
+          <Kpi
+            variant="purple"
+            icon={<AppIcon icon={Cloud} />}
+            label="선택 카테고리 총 배출량"
+            value={fmtEmission(view.selE)}
+            unit="tCO₂e"
+            sub={catLabel}
+            hoverMetaphors={buildEmissionMetaphors(view.selE)}
+          />
           <Kpi variant="blue" icon={<AppIcon icon={PieChart} />} label="전체 대비 비중" value={fmtNum(sharePct, 1)} unit="%" sub={`${scope} 배출량 대비`} />
           <Kpi
             variant="blue"

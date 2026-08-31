@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Plus } from "lucide-react";
+import { Plus, TrendingUp } from "lucide-react";
 import { AppIcon } from "@/components/icons";
 
 export type KpiVariant = "blue" | "green" | "purple" | "amber" | "teal" | "neutral" | "red";
@@ -68,6 +68,7 @@ export function Kpi({
   unit,
   sub,
   hoverBreakdown,
+  hoverMetaphors,
 }: {
   icon: ReactNode;
   variant?: KpiVariant;
@@ -76,18 +77,34 @@ export function Kpi({
   unit?: string;
   sub?: ReactNode;
   hoverBreakdown?: KpiHoverRow[];
+  hoverMetaphors?: string[];
 }) {
-  const hoverable = hoverBreakdown && hoverBreakdown.length > 0;
+  const hasBreakdown = hoverBreakdown && hoverBreakdown.length > 0;
+  const hasMetaphors = hoverMetaphors && hoverMetaphors.length > 0;
+  const hoverable = hasBreakdown || hasMetaphors;
+
+  const hoverTitle = hasMetaphors
+    ? "마우스를 올리면 배출량을 일상 비유로 볼 수 있습니다"
+    : hasBreakdown
+      ? "마우스를 올리면 현지인·외지인 상세를 볼 수 있습니다"
+      : undefined;
 
   return (
     <div
-      className={`kpi kpi--${variant}${hoverable ? " kpi--hoverable" : ""}`}
+      className={`kpi kpi--${variant}${hoverable ? " kpi--hoverable" : ""}${hasMetaphors ? " kpi--metaphor" : ""}`}
       tabIndex={hoverable ? 0 : undefined}
-      title={hoverable ? "마우스를 올리면 현지인·외지인 상세를 볼 수 있습니다" : undefined}
+      title={hoverTitle}
     >
       {hoverable && (
-        <span className="kpi__expand-hint" aria-hidden="true">
-          <AppIcon icon={Plus} size={12} strokeWidth={2.75} />
+        <span
+          className={`kpi__expand-hint${hasMetaphors ? " kpi__expand-hint--insight" : ""}`}
+          aria-hidden="true"
+        >
+          <AppIcon
+            icon={hasMetaphors ? TrendingUp : Plus}
+            size={12}
+            strokeWidth={2.75}
+          />
         </span>
       )}
       <div className="kpi__icon">{icon}</div>
@@ -98,7 +115,7 @@ export function Kpi({
           {unit && <small>{unit}</small>}
         </div>
         {sub && <div className="kpi__sub">{sub}</div>}
-        {hoverable && (
+        {hasBreakdown && (
           <div className="kpi__breakdown" aria-hidden="true">
             {hoverBreakdown.map((row) => (
               <div key={row.label} className="kpi__breakdown-row">
@@ -109,6 +126,16 @@ export function Kpi({
                 </strong>
               </div>
             ))}
+          </div>
+        )}
+        {hasMetaphors && (
+          <div className="kpi__metaphors" aria-hidden="true">
+            <ul>
+              {hoverMetaphors.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <p className="kpi__metaphors-foot">참고 환산 (배출·흡수 계수 가정)</p>
           </div>
         )}
       </div>

@@ -24,6 +24,7 @@ import { ALL, isFullYmRange, poiScopedMetrics, poiVisitorBreakdown, resolveYmRan
 import { compareBarOption, trendOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
 import { fmtEmission, fmtInt, fmtNum } from "@/lib/format";
+import { buildEmissionMetaphors } from "@/lib/emission-metaphors";
 import type { Poi, PoiDetail } from "@/lib/types";
 
 export default function RegionPage() {
@@ -235,8 +236,15 @@ function RegionPageContent() {
       ) : (
         <div className="content">
           <div className="kpi-row">
-            <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="선택 POI 탄소배출량" value={fmtEmission(selectedM!.emission)} unit="tCO₂e"
-              sub={<span className={selected.pc <= 1 ? "down" : "up"}>{selected.pc <= 1 ? "저배출" : "고배출"} · 1인당 {fmtNum(selected.pc, 2)}kg</span>} />
+            <Kpi
+              variant="purple"
+              icon={<AppIcon icon={Cloud} />}
+              label="선택 POI 탄소배출량"
+              value={fmtEmission(selectedM!.emission)}
+              unit="tCO₂e"
+              sub={<span className={selected.pc <= 1 ? "down" : "up"}>{selected.pc <= 1 ? "저배출" : "고배출"} · 1인당 {fmtNum(selected.pc, 2)}kg</span>}
+              hoverMetaphors={buildEmissionMetaphors(selectedM!.emission)}
+            />
             <Kpi
               variant="blue"
               icon={<AppIcon icon={Users} />}

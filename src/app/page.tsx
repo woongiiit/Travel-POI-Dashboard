@@ -42,6 +42,7 @@ import { donutOption, trendOption } from "@/lib/charts";
 import { lclsColor } from "@/lib/categories";
 import { fmtEmission, fmtInt, fmtKorUnit, fmtNum, fmtYmFull } from "@/lib/format";
 import { buildNationalAiInsight, nationalInsights, shortSido } from "@/lib/insights";
+import { buildEmissionMetaphors } from "@/lib/emission-metaphors";
 import type { Poi } from "@/lib/types";
 
 const INSIGHT_ICONS = [MapIcon, BarChart3, PieChart, Sprout] as const;
@@ -317,7 +318,15 @@ export default function HomePage() {
               { label: "외지인", value: fmtKorUnit(visitorBreakdown.outOfRegion), unit: "명" },
             ]}
           />
-          <Kpi variant="purple" icon={<AppIcon icon={Cloud} />} label="총 탄소배출량" value={fmtEmission(totalEmission)} unit="tCO₂e" sub="추정 배출량" />
+          <Kpi
+            variant="purple"
+            icon={<AppIcon icon={Cloud} />}
+            label="총 탄소배출량"
+            value={fmtEmission(totalEmission)}
+            unit="tCO₂e"
+            sub="추정 배출량"
+            hoverMetaphors={buildEmissionMetaphors(totalEmission)}
+          />
           <Kpi variant="green" icon={<AppIcon icon={Leaf} />} label="1인당 평균 배출량" value={fmtNum(agg.perCapitaKg, 2)} unit="kgCO₂e" sub="방문자 1인당" />
           <Kpi variant="amber" icon={<AppIcon icon={PieChart} />} label="상위 10개 POI 비중" value={fmtNum(agg.top10Share, 1)} unit="%" sub="배출 집중도" />
           <Kpi variant="teal" icon={<AppIcon icon={Sprout} />} label="저탄소 추천 POI" value={fmtInt(agg.lowCarbonCount)} unit="개" sub="저배출 카테고리" />
