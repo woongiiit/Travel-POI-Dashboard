@@ -72,6 +72,8 @@ export interface Meta {
   ymMax: string;
   nMonths: number;
   updatedAt: string;
+  /** 총량보존계수 K = ①/② (③=②×K) */
+  conservationK?: number;
   filters: {
     sido: string[];
     sggBySido: Record<string, string[]>;

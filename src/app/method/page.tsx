@@ -64,11 +64,13 @@ export default function MethodPage() {
               ))}
             </div>
             <div style={{ marginTop: 16, background: "var(--teal-soft)", borderRadius: 12, padding: "16px", textAlign: "center", border: "1px solid rgba(11,90,74,0.1)" }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: "var(--teal)" }}>
-                POI 탄소배출량 = 월별 방문자수 × 1인당 탄소배출계수
+              <span style={{ fontSize: 15, fontWeight: 700, color: "var(--teal)" }}>
+                POI 탄소배출량 = (방문자수 × 계수 × 가중치 × EWrt) × K
               </span>
-              <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 4 }}>
-                ※ 배출 단위: kgCO₂e (이산화탄소 환산톤)
+              <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 }}>
+                K(총량보존계수) ≈ {meta.conservationK != null ? meta.conservationK.toFixed(4) : "—"}
+                {" "}· 가중 적용 후 총량을 가중 전(방문자×계수) 규모로 맞춥니다.
+                <br />※ 배출 단위: tCO₂e (표시) / 내부 산정 kgCO₂e
               </div>
             </div>
           </div>
@@ -164,13 +166,14 @@ function SummaryRow({ icon, label, value, last }: { icon: React.ReactNode; label
 const STEPS = [
   { t: "통신데이터 수집", d: "KT 통신데이터를 활용해 POI별 월별 방문자수를 수집·집계합니다." },
   { t: "대·중분류 분류", d: "관광 진흥법 체계 기준으로 각 POI를 대분류·중분류로 분류합니다." },
-  { t: "배출계수 적용", d: "중분류별 1인당 탄소배출계수를 적용하여 배출량을 추정합니다." },
-  { t: "월별 배출량 산출", d: "월별 방문자수 × 배출계수로 POI별 월별 탄소배출량을 산출합니다." },
+  { t: "배출계수·가중 적용", d: "중분류 계수와 업종가중치·에너지 보정(EWrt)을 적용해 가중 배출량(②)을 산출합니다." },
+  { t: "총량보존(K) 보정", d: "전체 단일 계수 K로 총량을 가중 전(①) 규모에 맞추고, POI 간 상대비율은 유지합니다." },
   { t: "단위별 집계", d: "시도·시군구·POI 단위로 집계하여 제공합니다." },
 ];
 
 const FAQ = [
   { q: "Q1. 배출계수는 어떻게 정하나요?", a: "체류·이동 강도가 높은 숙박·항공레저는 높게, 자연·도시공원은 낮게 가정했습니다. 실제 계수는 정책·연구에 따라 정교화됩니다." },
-  { q: "Q2. 이 데이터는 어떤 목적인가요?", a: "여행자의 여행 계획, 친환경 여행 선택, 지역 간 비교 등 여행자·정책 참고용으로 제공됩니다." },
-  { q: "Q3. 사진·좌표는 어디서 오나요?", a: "한국관광공사 국문 관광정보 서비스(GW) API의 contentId 기반으로 사진·좌표를 조회합니다." },
+  { q: "Q2. 총량보존계수 K는 무엇인가요?", a: "가중치·EWrt 적용으로 커진 총량(②)을 가중 전 총량(①)으로 되돌리는 단일 계수입니다. 모든 POI에 동일하게 곱하므로 순위·비중 구조는 유지됩니다." },
+  { q: "Q3. 이 데이터는 어떤 목적인가요?", a: "여행자의 여행 계획, 친환경 여행 선택, 지역 간 비교 등 여행자·정책 참고용으로 제공됩니다." },
+  { q: "Q4. 사진·좌표는 어디서 오나요?", a: "한국관광공사 국문 관광정보 서비스(GW) API의 contentId 기반으로 사진·좌표를 조회합니다." },
 ];

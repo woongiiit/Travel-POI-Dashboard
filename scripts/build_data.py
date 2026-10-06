@@ -2,22 +2,28 @@
 """
 POI 최종 엑셀(와이드) -> 대시보드용 집계 JSON 빌드.
 
-원본: 참고자료/■중요■POI_최종(260723).xlsx (시트 POI_탄소발자국)
+원본: 참고자료/[최종]POI_final_K.xlsx (시트 POI_탄소발자국)
 산출물 (data/):
   - factors.json, meta.json, pois.json, poi_monthly.json
+
+산식 (대시보드 최종값 = 엑셀 ③):
+  ① 가중 전 = Σ(방문자×계수)
+  ② 가중   = Σ(방문자×계수×업종가중치×EWrt)
+  K = ①/②  (전체 단일 총량보존계수)
+  ③ 최종   = ②×K  → POI별 e·pc 에 반영 (상대비율·순위 유지, 총량=①)
 
 UI/스키마 호환:
   - (kt)관광지_현지인_외지인.xlsx → cont_id별 vL(현지인)·vO(외지인) 집계
   - 소분류 미제공 → scls=중분류
   - cont_id 미제공 → 기존 pois.json 이름·시도·시군구 매칭으로 회수, 없으면 안정 해시 ID
-  - 월별 탄소 수식값 미캐시 → 방문자×계수×가중치×EWrt 로 재계산
+  - 월별 탄소 수식값 미캐시 → 속성으로 ② 재계산 후 K 적용
 """
 import openpyxl, json, os, hashlib, re
 from datetime import date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "참고자료", "■중요■POI_최종(260723).xlsx")
 REF_DIR = os.path.join(ROOT, "참고자료")
+SRC = os.path.join(REF_DIR, "[최종]POI_final_K.xlsx")
 SHEET = "POI_탄소발자국"
 OUT = os.path.join(ROOT, "data")
 os.makedirs(OUT, exist_ok=True)
@@ -205,6 +211,8 @@ poi_monthly = {}
 legacy_hit = 0
 legacy_miss = 0
 cnt = 0
+sum_plain_kg = 0.0      # ① 가중 전
+sum_weighted_kg = 0.0   # ② 가중
 
 for row in it:
     nm = row[COL_NM]
@@ -234,15 +242,19 @@ for row in it:
 
     month_v = {}
     total_v = 0.0
-    total_e_kg = 0.0
+    e2_kg = 0.0  # ② 가중 배출 (K 적용 전)
+    e1_kg = 0.0  # ① 가중 전
     for i, ym in enumerate(ym_list):
         v = num(row[COL_VIS_START + i])
         month_v[ym] = v
         total_v += v
-        total_e_kg += v * coef * weight * ewrt_for_ym(ym, ewrt23, ewrt24)
+        plain = v * coef
+        weighted = plain * weight * ewrt_for_ym(ym, ewrt23, ewrt24)
+        e1_kg += plain
+        e2_kg += weighted
 
-    # UI pc: 실효 1인당 kg (총배출kg / 총방문자)
-    pc = (total_e_kg / total_v) if total_v > 0 else round(coef * weight, 3)
+    sum_plain_kg += e1_kg
+    sum_weighted_kg += e2_kg
 
     nati = NATI_TOTALS.get(cont_id)
     if nati:
@@ -272,8 +284,7 @@ for row in it:
         "v": round(total_v, 1),
         "vL": vL,
         "vO": vO,
-        "e": round(total_e_kg / 1000.0, 2),
-        "pc": round(pc, 3),
+        "_e2_kg": e2_kg,  # 임시: K 적용 후 제거
     }
     pois[cont_id] = p
     poi_monthly[cont_id] = month_v
@@ -294,6 +305,21 @@ print("rows total:", cnt, "pois:", len(pois))
 print(f"legacy cont_id match: hit={legacy_hit} miss={legacy_miss}")
 kto_coords = sum(1 for c in POI_COORDS.values() if c.get("source") == "kto")
 print(f"coord cache: kto={kto_coords} (poi_coords.json)")
+
+# ---- 총량보존계수 K = ①/② → ③ = ②×K ----
+if sum_weighted_kg <= 0:
+    raise SystemExit("가중 배출 합계(②)가 0 — K를 계산할 수 없습니다.")
+CONSERVATION_K = sum_plain_kg / sum_weighted_kg
+print(
+    f"conservation K: {CONSERVATION_K:.6f} "
+    f"(①={round(sum_plain_kg/1000,1)} t / ②={round(sum_weighted_kg/1000,1)} t)"
+)
+
+for p in pois.values():
+    e3_kg = p.pop("_e2_kg") * CONSERVATION_K
+    total_v = p["v"]
+    p["e"] = round(e3_kg / 1000.0, 2)
+    p["pc"] = round((e3_kg / total_v) if total_v > 0 else 0.0, 3)
 
 # factors.json: 엑셀 B안 계수로 갱신 (method 페이지용)
 for mcls, coef in mcls_coef.items():
@@ -384,6 +410,7 @@ meta = {
     "ymList": ym_list,
     "ymMin": ym_list[0], "ymMax": ym_list[-1], "nMonths": n_months,
     "updatedAt": date.today().isoformat(),
+    "conservationK": round(CONSERVATION_K, 8),
     "filters": {
         "sido": sorted(sido_set),
         "sggBySido": {k: sorted(v) for k, v in sgg_by_sido.items()},
@@ -420,7 +447,8 @@ dump("factors.json", {
     "factors": FACTORS,
     "default": FDEFAULT,
     "lowCarbonThreshold": LOW_TH,
-    "_comment": "POI_최종(260723) B안 계수. 실제 배출=방문자×계수×업종가중치×EWrt",
+    "conservationK": round(CONSERVATION_K, 8),
+    "_comment": "POI_final_K B안 계수. 최종 배출=(방문자×계수×가중치×EWrt)×K, K=총량보존계수",
 })
 dump("meta.json", meta)
 dump("pois.json", pois_out)
