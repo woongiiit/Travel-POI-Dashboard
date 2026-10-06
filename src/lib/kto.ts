@@ -1,7 +1,8 @@
 import "server-only";
 import type { PoiDetail } from "./types";
+import { getSetting } from "./local-settings";
 
-const BASE = process.env.KTO_API_BASE ?? "https://apis.data.go.kr/B551011/KorService2";
+const DEFAULT_BASE = "https://apis.data.go.kr/B551011/KorService2";
 
 interface CacheEntry {
   data: PoiDetail;
@@ -10,8 +11,12 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const TTL = 1000 * 60 * 60 * 24; // 24h
 
+function getBase(): string {
+  return getSetting("KTO_API_BASE") || DEFAULT_BASE;
+}
+
 function getKey(): string {
-  return process.env.KTO_SERVICE_KEY?.trim() ?? "";
+  return getSetting("KTO_SERVICE_KEY");
 }
 
 /**
@@ -27,7 +32,7 @@ function buildUrl(endpoint: string, params: Record<string, string>): string {
     ...params,
   });
   const key = getKey();
-  return `${BASE}/${endpoint}?${sp.toString()}&serviceKey=${encodeURIComponent(key)}`;
+  return `${getBase()}/${endpoint}?${sp.toString()}&serviceKey=${encodeURIComponent(key)}`;
 }
 
 async function fetchJson(url: string, timeoutMs = 10000): Promise<unknown> {

@@ -37,3 +37,10 @@ __pycache__/
 # coord fetch export artifacts (regeneratable)
 /data/poi_coords_failed.json
 /data/poi_coords_failed.csv
+/data/local-settings.json
+
+# windows portable package intermediates
+/release/
+/packaging/launcher/Payload/
+/packaging/launcher/bin/
+/packaging/launcher/obj/

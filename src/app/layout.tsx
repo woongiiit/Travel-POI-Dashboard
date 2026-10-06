@@ -3,6 +3,7 @@ import "./globals.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Sidebar } from "@/components/Sidebar";
 import { DataProvider } from "@/components/DataProvider";
+import { AppShell } from "@/components/AppShell";
 
 export const metadata: Metadata = {
   title: "탄소중립 관광 대시보드 | 한국관광공사",
@@ -16,7 +17,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <DataProvider>
           <div className="app">
             <Sidebar />
-            <div className="main">{children}</div>
+            <div className="main">
+              <AppShell>{children}</AppShell>
+            </div>
           </div>
         </DataProvider>
       </body>

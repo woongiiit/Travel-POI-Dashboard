@@ -20,6 +20,7 @@ import { useDataset } from "@/components/DataProvider";
 import { AppIcon } from "@/components/icons";
 import { PeriodRangeField } from "@/components/PeriodRangeField";
 import { PageHeader, Card, Kpi, LoadingState, ErrorState, Select, InsightBlock } from "@/components/ui";
+import { WaitModal } from "@/components/WaitModal";
 import { EChart } from "@/components/charts/EChart";
 import { PoiPhoto } from "@/components/PoiPhoto";
 import { ALL, groupBy, isFullYmRange, poiScopedMetrics, resolveYmRange } from "@/lib/aggregate";
@@ -32,6 +33,7 @@ import {
   buildSeasonGuideContent,
   poiSeasonalWeight,
 } from "@/lib/season";
+import type { GuideAiResult } from "@/lib/guide-ai-types";
 
 const LEVELS = ["매우높음", "높음", "보통", "낮음", "매우낮음"];
 
@@ -52,6 +54,8 @@ export default function GuidePage() {
   const [monthly, setMonthly] = useState<Record<string, number[]> | null>(null);
   const [ymFrom, setYmFrom] = useState("");
   const [ymTo, setYmTo] = useState("");
+  const [llm, setLlm] = useState<GuideAiResult | null>(null);
+  const [llmLoading, setLlmLoading] = useState(false);
 
   useEffect(() => { loadMonthly().then(setMonthly); }, [loadMonthly]);
 
@@ -117,14 +121,91 @@ export default function GuidePage() {
     };
   }, [meta, pois, sido, sgg, nationalPc, travelerType, ymFromR, ymToR, monthly, periodReady]);
 
+  const regionAdvice = useMemo(() => {
+    if (!data || data.empty) return null;
+    return buildRegionGuideAdvice({
+      course: data.course,
+      sido,
+      travelerType,
+      period: data.periodSeason,
+      routeSeasonNote: data.seasonContent.routeSeasonNote,
+    });
+  }, [data, sido, travelerType]);
+
+  useEffect(() => {
+    if (!data || data.empty || !regionAdvice) {
+      setLlm(null);
+      setLlmLoading(false);
+      return;
+    }
+    setLlmLoading(true);
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/guide-ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify({
+            scope: sgg === ALL ? sido : `${sido} ${sgg}`,
+            sido,
+            sgg,
+            travelerType,
+            periodLabel: data.periodSeason.periodLabel,
+            seasonLabel: data.periodSeason.seasonActive ? data.periodSeason.label : undefined,
+            carbonLevel: LEVELS[data.levelIdx],
+            regionPc: data.regionPc,
+            nationalRatioPct: Math.round((data.ratio - 1) * 100),
+            topCategory: data.lclsGroups[0]?.label,
+            course: data.course.map((p) => ({
+              nm: p.nm,
+              mcls: p.mcls,
+              sgg: p.sgg,
+              pc: p.pc,
+            })),
+            similar: data.similar.map((p) => ({
+              nm: p.nm,
+              sgg: p.sgg,
+              pc: p.pc,
+            })),
+            ruleCautions: regionAdvice.cautions,
+            ruleSuggestions: regionAdvice.suggestionLines,
+          }),
+        });
+        if (!res.ok) throw new Error(`guide-ai ${res.status}`);
+        const json = (await res.json()) as GuideAiResult;
+        if (!ctrl.signal.aborted) setLlm(json);
+      } catch (e) {
+        if (ctrl.signal.aborted) return;
+        setLlm({
+          configured: false,
+          source: "fallback",
+          usedTavily: false,
+          regionSummary: "",
+          tips: [],
+          courseNote: "",
+          cautions: [],
+          suggestions: [],
+          error: e instanceof Error ? e.message : "LLM 호출 실패",
+        });
+      } finally {
+        if (!ctrl.signal.aborted) setLlmLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      ctrl.abort();
+      clearTimeout(timer);
+    };
+  }, [data, regionAdvice, sido, sgg, travelerType]);
+
   if (loading) return (<><PageHeader title="AI 여행자 가이드" /><LoadingState /></>);
   if (error || !meta) return (<><PageHeader title="AI 여행자 가이드" /><ErrorState message={error ?? "오류"} /></>);
   if (!periodReady) return (<><PageHeader title="AI 여행자 가이드" /><LoadingState label="월별 데이터 로딩 중…" /></>);
 
   const sggOptions = sido ? [ALL, ...(meta.filters.sggBySido[sido] ?? [])] : [ALL];
-  const scope = sgg === ALL ? sido : `${sido} ${sgg}`;
 
-  if (!data || data.empty) {
+  if (!data || data.empty || !regionAdvice) {
     return (
       <>
         <PageHeader title="AI 여행자 가이드" subtitle="선택 지역·POI 기반 맞춤형 탄소중립 여행 제안" />
@@ -142,18 +223,37 @@ export default function GuidePage() {
     `${fmtNum(data.regionPc, 2)}\nkgCO₂e/인`,
   );
 
-  const regionAdvice = buildRegionGuideAdvice({
-    course: data.course,
-    sido,
-    travelerType,
-    period: data.periodSeason,
-    routeSeasonNote: data.seasonContent.routeSeasonNote,
-  });
+  const useLlm = llm?.source === "llm";
+  const regionSummary =
+    useLlm && llm.regionSummary ? llm.regionSummary : data.seasonContent.regionSummary;
+  const tips = useLlm && llm.tips.length
+    ? llm.tips
+    : [
+        ...(data.periodSeason.seasonActive ? data.seasonContent.tips : []),
+        ...GUIDE_TIPS.map((g) => ({ title: g.title, text: g.text })),
+      ];
+  const courseNote =
+    useLlm && llm.courseNote ? llm.courseNote : data.seasonContent.courseNote;
+  const cautions =
+    useLlm && llm.cautions.length ? llm.cautions : regionAdvice.cautions;
+  const suggestions =
+    useLlm && llm.suggestions.length ? llm.suggestions : regionAdvice.suggestionLines;
+
+  const llmBadge = llmLoading
+    ? "LLM 생성 중…"
+    : useLlm
+      ? `LLM${llm.usedTavily ? " · Tavily" : ""}`
+      : "규칙 기반";
 
   return (
     <>
+      <WaitModal open={llmLoading} message="AI 답변을 받아오고 있습니다…" />
       <PageHeader title="AI 여행자 가이드" subtitle="선택 지역 기반 맞춤형 탄소중립 여행 제안"
-        right={<span className="pill pill--teal"><AppIcon icon={Sparkles} size={14} /> AI 추천</span>} />
+        right={
+          <span className={`pill ${useLlm ? "pill--teal" : "pill--ghost"}`}>
+            <AppIcon icon={Sparkles} size={14} /> {llmBadge}
+          </span>
+        } />
       <Filters meta={meta} sido={sido} sgg={sgg} sggOptions={sggOptions} travelerType={travelerType}
         ymFrom={ymFrom} ymTo={ymTo}
         onSido={(v) => { setSido(v); setSgg(ALL); }} onSgg={setSgg} onType={setTravelerType}
@@ -165,6 +265,9 @@ export default function GuidePage() {
           <span>
             <b>{travelerType}</b> — {data.seasonContent.travelerHint}
             {" "}추천 코스·유사 POI·대표 POI에 반영됩니다.
+            {llm?.error && !useLlm && (
+              <> · <span style={{ color: "var(--amber)" }}>{llm.error}</span></>
+            )}
           </span>
         </div>
 
@@ -178,16 +281,16 @@ export default function GuidePage() {
           />
           <Kpi variant="teal" icon={<AppIcon icon={Tags} />} label="대표 저탄소 POI"
             value={<span style={{ fontSize: 16 }}>{data.rep.nm}</span>} sub={`1인당 ${fmtNum(data.rep.pc, 2)} kgCO₂e`} />
-            <Kpi variant="blue" icon={<AppIcon icon={Compass} />} label="추천 저탄소 코스 수" value={data.course.length} unit="개" sub={data.periodSeason.seasonActive ? `${data.periodSeason.label} · ${travelerType}` : `${travelerType} 맞춤`} />
+          <Kpi variant="blue" icon={<AppIcon icon={Compass} />} label="추천 저탄소 코스 수" value={data.course.length} unit="개" sub={data.periodSeason.seasonActive ? `${data.periodSeason.label} · ${travelerType}` : `${travelerType} 맞춤`} />
           <Kpi variant="green" icon={<AppIcon icon={TrendingDown} />} label="저탄소 POI 비중"
             value={fmtNum((data.regionPois.filter((p) => p.pc <= 1).length / data.regionPois.length) * 100, 0)} unit="%"
             sub={`${fmtInt(data.regionPois.length)}개 중`} />
         </div>
 
         <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
-          <Card title="① 지역 종합 평가">
+          <Card title="① 지역 종합 평가" unit={useLlm ? "LLM" : undefined}>
             <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 0 }}>
-              {data.seasonContent.regionSummary}
+              {llmLoading && !useLlm ? "AI 요약을 생성하고 있습니다…" : regionSummary}
             </p>
             <div style={{ height: 180 }}>
               <EChart option={donut} height={180} />
@@ -197,16 +300,22 @@ export default function GuidePage() {
             </div>
           </Card>
 
-          <Card title="② 여행자 관점 탄소중립 가이드" unit={data.periodSeason.periodLabel}>
-            {data.periodSeason.seasonActive && data.seasonContent.tips.map((g) => (
-              <InsightBlock key={g.title} icon={<AppIcon icon={Bus} size={16} />} tone="teal" title={g.title} text={g.text} />
-            ))}
-            {GUIDE_TIPS.map((g) => (
-              <InsightBlock key={g.title} icon={<AppIcon icon={g.icon} size={16} />} tone={g.tone} title={g.title} text={g.text} />
+          <Card title="② 여행자 관점 탄소중립 가이드" unit={useLlm ? `LLM · ${data.periodSeason.periodLabel}` : data.periodSeason.periodLabel}>
+            {tips.map((g) => (
+              <InsightBlock
+                key={`${g.title}-${g.text.slice(0, 24)}`}
+                icon={<AppIcon icon={Bus} size={16} />}
+                tone="teal"
+                title={g.title}
+                text={g.text}
+              />
             ))}
           </Card>
 
-            <Card title="③ 추천 코스 / 대체 POI" foot={data.periodSeason.seasonActive ? `※ ${data.periodSeason.label} 시즌 · ${travelerType} · 저탄소 POI 중심` : `※ ${travelerType} · 저탄소 POI 중심 · 선택 기간 반영`}>
+          <Card
+            title="③ 추천 코스 / 대체 POI"
+            foot={data.periodSeason.seasonActive ? `※ ${data.periodSeason.label} 시즌 · ${travelerType} · 저탄소 POI 중심` : `※ ${travelerType} · 저탄소 POI 중심 · 선택 기간 반영`}
+          >
             <div style={{ position: "relative", paddingLeft: 8 }}>
               {data.course.map((p, i) => (
                 <div key={p.id} style={{ display: "flex", gap: 10, marginBottom: 12 }}>
@@ -224,19 +333,19 @@ export default function GuidePage() {
               ))}
             </div>
             <div style={{ background: "var(--green-soft)", borderRadius: 8, padding: "8px 10px", fontSize: 11.5, color: "var(--green)", border: "1px solid rgba(45,155,106,0.15)" }}>
-              {data.seasonContent.courseNote}
+              {courseNote}
             </div>
           </Card>
         </div>
 
         <div className="grid" style={{ gridTemplateColumns: "1fr 1.6fr" }}>
-          <Card title="④ 주의 포인트 및 동선 제안" foot={regionAdvice.routePath ? `※ 추천 코스 기준: ${regionAdvice.routePath}` : undefined}>
+          <Card title="④ 주의 포인트 및 동선 제안" foot={regionAdvice.routePath ? `※ 추천 코스 기준: ${regionAdvice.routePath}` : undefined} unit={useLlm ? "LLM" : undefined}>
             <div style={{ background: "var(--amber-soft)", border: "1px solid rgba(224,154,62,0.2)", borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
               <div style={{ fontWeight: 700, fontSize: 12.5, color: "var(--amber)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
                 <AppIcon icon={AlertTriangle} size={14} /> 주의 포인트
               </div>
               <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.7 }}>
-                {regionAdvice.cautions.map((c) => (
+                {cautions.map((c) => (
                   <li key={c}>{c}</li>
                 ))}
               </ul>
@@ -246,13 +355,18 @@ export default function GuidePage() {
                 추천 저탄소 동선
               </div>
               <div style={{ fontWeight: 700, fontSize: 13.5, color: "var(--teal)", lineHeight: 1.65 }}>
-                {regionAdvice.suggestionLines.map((line, i) => (
-                  <div key={line} style={{ marginBottom: i < regionAdvice.suggestionLines.length - 1 ? 4 : 0 }}>
+                {suggestions.map((line, i) => (
+                  <div key={line} style={{ marginBottom: i < suggestions.length - 1 ? 4 : 0 }}>
                     {line}
                   </div>
                 ))}
               </div>
             </div>
+            {useLlm && llm?.sources && llm.sources.length > 0 && (
+              <div style={{ marginTop: 10, fontSize: 10.5, color: "var(--text-faint)", lineHeight: 1.5 }}>
+                참고 검색: {llm.sources.map((s) => s.title || s.url).filter(Boolean).slice(0, 3).join(" · ")}
+              </div>
+            )}
           </Card>
 
           <Card title="비슷한 취향의 다른 저탄소 POI" unit={data.periodSeason.seasonActive ? `${data.periodSeason.label} · ${travelerType}` : travelerType}>

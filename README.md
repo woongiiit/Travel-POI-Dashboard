@@ -79,6 +79,21 @@ KTO_SERVICE_KEY=발급받은_서비스키
 - **전국 지도 실좌표**: `npm run fetch:coords` — `areaBasedSyncList2` 일괄 목록(~500 API) + `contentId` 매칭
 - **키 미설정 시**: 사진 영역은 카테고리 아이콘으로, 좌표는 시도 중심 기반 근사값으로 폴백합니다.
 
+## AI 여행자 가이드 (HuggingFace + Tavily)
+
+`.env.local`에 아래를 설정하면 `/guide`의 ①②③④ 문구를 LLM이 생성합니다. 키 없으면 기존 규칙 기반 문구로 폴백합니다.
+
+```
+HUGGINGFACE_API_KEY=
+HUGGINGFACE_MODEL=Qwen/Qwen2.5-7B-Instruct
+HUGGINGFACE_TEMPERATURE=0.4
+TAVILY_API_KEY=
+```
+
+- `HUGGINGFACE_*`: Inference Router chat completions (`/api/guide-ai`)
+- `TAVILY_API_KEY`(선택): 지역·저탄소 관광 웹 검색 컨텍스트 보강
+- 변경 후 `npm run dev` 재시작 필요
+
 ## 알려진 한계 / 향후 개선
 
 - 전국 분포 지도 좌표는 `npm run fetch:coords`로 KTO API 실좌표를 `data/poi_coords.json`에 캐시할 수 있습니다. 캐시 미실행·조회 실패 POI는 **시도 중심점 기반 결정적 분산값**으로 폴백합니다.

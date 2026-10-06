@@ -17,7 +17,23 @@ DEFAULT_BASE = "https://apis.data.go.kr/B551011/KorService2"
 TRANSIENT_ERRORS = ("HTTP 429", "HTTP 502", "HTTP 503", "TIMEOUT")
 
 
+def _load_local_settings() -> dict:
+    path = os.path.join(ROOT, "data", "local-settings.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def load_service_key() -> str:
+    local = _load_local_settings()
+    key = str(local.get("KTO_SERVICE_KEY") or "").strip()
+    if key:
+        return key
     key = os.environ.get("KTO_SERVICE_KEY", "").strip()
     if key:
         return key
@@ -31,6 +47,10 @@ def load_service_key() -> str:
 
 
 def load_api_base() -> str:
+    local = _load_local_settings()
+    base = str(local.get("KTO_API_BASE") or "").strip()
+    if base:
+        return base
     base = os.environ.get("KTO_API_BASE", "").strip()
     return base or DEFAULT_BASE
 
